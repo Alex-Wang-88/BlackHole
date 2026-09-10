@@ -132,7 +132,7 @@ int main(int argc, char** argv)
 
             if(gpuRayTracer)
                 gpuRayTracer->render(engine.WIDTH, engine.HEIGHT);
-            engine.renderScene(SagA.r_s);
+            engine.renderScene(SagA.r_s, !settings.rayTracing);
 
             if(frameBudget > Clock::duration::zero())
                 paceUntil<Clock>(frameStart + frameBudget);

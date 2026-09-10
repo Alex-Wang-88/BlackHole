@@ -13,7 +13,8 @@ compositor.
   compute-shader backend.
 - Kept the heavy ray integration on the GPU and removed the GPU-to-CPU-to-GPU
   frame copy.
-- Ray tracing can be disabled for a lightweight grid-only view.
+- Ray tracing can be disabled for a lightweight raster black-hole silhouette
+  and grid view.
 - The default target is 30 FPS. VSync remains disabled so the application uses
   its own stable frame pacing.
 - Added discrete-GPU preference exports for NVIDIA Optimus and AMD PowerXpress
@@ -82,8 +83,9 @@ removing it entirely would allow a bad ray or driver timeout to hang the GPU.
 - `Shift` + left mouse drag: pan the camera target
 - Mouse wheel: zoom in or out
 
-Camera movement resets temporal accumulation. With ray tracing disabled, the
-ray-traced layer is transparent and the 3D perspective grid remains visible.
+Camera movement resets temporal accumulation. With ray tracing disabled, a
+lightweight raster black-hole silhouette and accretion ring remain visible;
+the expensive ray-traced layer is transparent.
 
 ## Project structure
 

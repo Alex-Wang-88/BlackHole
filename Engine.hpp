@@ -13,7 +13,7 @@ public:
     Engine(const Engine&) = delete;
     Engine& operator=(const Engine&) = delete;
 
-    void renderScene(double schwarzschildRadius);
+    void renderScene(double schwarzschildRadius, bool drawFallback);
 
     GLuint colorTexture() const { return texture; }
     GLuint materialTexture() const { return materialTextureId; }
@@ -30,6 +30,7 @@ private:
     GLuint texture = 0;
     GLuint materialTextureId = 0;
     GLuint shaderProgram = 0;
+    GLuint fallbackShaderProgram = 0;
 
     GLuint gridVAO = 0;
     GLuint gridVBO = 0;
@@ -38,9 +39,11 @@ private:
     GLsizei gridIndexCount = 0;
 
     GLuint createShaderProgram();
+    GLuint createFallbackBlackHoleShaderProgram();
     GLuint createGridShaderProgram();
     void createPerspectiveGrid();
     void drawPerspectiveGrid(double schwarzschildRadius, float aspect);
+    void drawFallbackBlackHole(double schwarzschildRadius, float aspect);
 };
 
 #endif

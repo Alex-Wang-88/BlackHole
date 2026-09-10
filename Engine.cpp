@@ -129,6 +129,7 @@ Engine::Engine(const RenderSettings& settings)
               << "\n";
 
     shaderProgram = createShaderProgram();
+    fallbackShaderProgram = createFallbackBlackHoleShaderProgram();
     gridShaderProgram = createGridShaderProgram();
     createPerspectiveGrid();
 
@@ -273,6 +274,71 @@ GLuint Engine::createShaderProgram()
     return linkProgram(vertexShader, fragmentShader, "Screen shader");
 }
 
+GLuint Engine::createFallbackBlackHoleShaderProgram()
+{
+    const char* vertexShaderSource = R"(
+        #version 410 core
+
+        layout(location = 0) in vec2 aPos;
+        layout(location = 1) in vec2 aTexCoord;
+
+        out vec2 TexCoord;
+
+        void main()
+        {
+            gl_Position = vec4(aPos, 0.0, 1.0);
+            TexCoord = aTexCoord;
+        }
+    )";
+
+    const char* fragmentShaderSource = R"(
+        #version 410 core
+
+        in vec2 TexCoord;
+        out vec4 FragColor;
+
+        uniform vec2 uCenter;
+        uniform float uRadius;
+        uniform float uAspect;
+
+        void main()
+        {
+            vec2 offset = (TexCoord - uCenter) * vec2(uAspect, 1.0);
+            float radial = length(offset) / max(uRadius, 1.0e-6);
+
+            if(radial > 1.30)
+                discard;
+
+            if(radial < 0.78)
+            {
+                FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+                return;
+            }
+
+            float ringT = clamp((radial - 0.78) / 0.52, 0.0, 1.0);
+            vec3 innerColor = vec3(1.0, 0.12, 0.01);
+            vec3 outerColor = vec3(1.0, 0.72, 0.10);
+            vec3 ringColor = mix(innerColor, outerColor, ringT);
+            float alpha = 0.92 * (1.0 - smoothstep(0.78, 1.30, radial));
+
+            FragColor = vec4(ringColor, alpha);
+        }
+    )";
+
+    GLuint vertexShader = compileShader(
+        GL_VERTEX_SHADER,
+        vertexShaderSource,
+        "Fallback black-hole vertex shader");
+    GLuint fragmentShader = compileShader(
+        GL_FRAGMENT_SHADER,
+        fragmentShaderSource,
+        "Fallback black-hole fragment shader");
+    return linkProgram(
+        vertexShader,
+        fragmentShader,
+        "Fallback black-hole shader");
+}
+
 GLuint Engine::createGridShaderProgram()
 {
     const char* vertexShaderSource = R"(
@@ -410,8 +476,67 @@ void Engine::drawPerspectiveGrid(double schwarzschildRadius, float aspect)
     glBindVertexArray(0);
 }
 
+void Engine::drawFallbackBlackHole(double schwarzschildRadius, float aspect)
+{
+    if(schwarzschildRadius <= 0.0 || fallbackShaderProgram == 0) return;
+
+    const float inverseRadius = static_cast<float>(1.0 / schwarzschildRadius);
+    const glm::vec3 eye = camera.pos * inverseRadius;
+    const glm::vec3 target = camera.target * inverseRadius;
+    const glm::vec3 forward = glm::normalize(target - eye);
+    glm::vec3 right = glm::cross(forward, glm::vec3(0.0f, 1.0f, 0.0f));
+
+    if(glm::dot(right, right) < 1.0e-8f)
+        right = glm::vec3(0.0f, 0.0f, 1.0f);
+    else
+        right = glm::normalize(right);
+    const glm::vec3 screenUp = glm::normalize(glm::cross(right, forward));
+
+    const glm::mat4 projection = glm::perspective(
+        glm::radians(camera.fovY),
+        aspect,
+        0.05f,
+        200.0f);
+    const glm::mat4 view = glm::lookAt(
+        eye,
+        target,
+        glm::vec3(0.0f, 1.0f, 0.0f));
+    const glm::vec4 centerClip = projection * view *
+        glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+    const glm::vec4 edgeClip = projection * view *
+        glm::vec4(screenUp * 2.6f, 1.0f);
+
+    if(centerClip.w <= 0.0f || edgeClip.w <= 0.0f) return;
+
+    const float centerNdcX = centerClip.x / centerClip.w;
+    const float centerNdcY = centerClip.y / centerClip.w;
+    const float edgeNdcY = edgeClip.y / edgeClip.w;
+    const float radius = std::fabs(edgeNdcY - centerNdcY) * 0.5f;
+    if(radius <= 1.0e-5f) return;
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glUseProgram(fallbackShaderProgram);
+    glUniform2f(
+        glGetUniformLocation(fallbackShaderProgram, "uCenter"),
+        centerNdcX * 0.5f + 0.5f,
+        centerNdcY * 0.5f + 0.5f);
+    glUniform1f(
+        glGetUniformLocation(fallbackShaderProgram, "uRadius"),
+        radius);
+    glUniform1f(
+        glGetUniformLocation(fallbackShaderProgram, "uAspect"),
+        aspect);
+    glBindVertexArray(quadVAO);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
+}
+
 void Engine::renderScene(
-    double schwarzschildRadius)
+    double schwarzschildRadius,
+    bool drawFallback)
 {
     int framebufferWidth = 0;
     int framebufferHeight = 0;
@@ -426,6 +551,8 @@ void Engine::renderScene(
     float aspect = static_cast<float>(framebufferWidth) /
                    static_cast<float>(framebufferHeight);
     drawPerspectiveGrid(schwarzschildRadius, aspect);
+    if(drawFallback)
+        drawFallbackBlackHole(schwarzschildRadius, aspect);
 
     glDisable(GL_DEPTH_TEST);
     glDepthMask(GL_FALSE);
@@ -463,6 +590,7 @@ Engine::~Engine()
     if(gridVBO) glDeleteBuffers(1, &gridVBO);
     if(gridVAO) glDeleteVertexArrays(1, &gridVAO);
     if(gridShaderProgram) glDeleteProgram(gridShaderProgram);
+    if(fallbackShaderProgram) glDeleteProgram(fallbackShaderProgram);
     if(shaderProgram) glDeleteProgram(shaderProgram);
     if(window) glfwDestroyWindow(window);
     glfwTerminate();

@@ -106,12 +106,6 @@ GpuRayTracer::GpuRayTracer(
     cacheUniformLocations();
     createStorageBuffers();
 
-    const char* renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
-    const char* version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
-    std::cout << "OpenGL GPU: " << (renderer != nullptr ? renderer : "unknown")
-              << "\n";
-    std::cout << "OpenGL version: " << (version != nullptr ? version : "unknown")
-              << "\n";
     std::cout << "GPU raytrace resolution: " << renderWidth << " x "
               << renderHeight << "\n";
     std::cout << "GPU MAX_STEPS: " << maxSteps << "\n";

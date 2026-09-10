@@ -8,7 +8,8 @@
 
 - 用 OpenGL 4.3 Compute Shader 替换了 macOS 专用的 Metal 和 Objective-C++ 路径。
 - 测地线积分仍全部放在显卡上，并移除了“显卡 → CPU → 显卡”的每帧回读/上传。
-- 光追可以关闭，关闭后保留轻量的黑洞轮廓、吸积环和三维网格视图。
+- 默认开启 GPU 光追，使用 `256×192` 工作分辨率、`6144` 步积分和 4 帧时间累积；在已测试的 RTX 5060 Laptop GPU 上更适合稳定 30 FPS。
+- 光追也可以关闭，关闭后保留轻量的黑洞轮廓、吸积环和三维网格视图。
 - 默认目标帧率为 30 FPS。VSync 仍关闭，由程序自身稳定限帧。
 - 为 NVIDIA Optimus 和 AMD PowerXpress 笔记本增加了优先选择独立显卡的导出标记。
 - 分辨率、积分步数、时间累积采样数和垂直同步均可通过环境变量调整。
@@ -47,11 +48,11 @@ cmake --build build --config Release --parallel
 | 变量 | 默认值 | 作用 |
 | --- | ---: | --- |
 | `BLACKHOLE_WINDOW_WIDTH` / `BLACKHOLE_WINDOW_HEIGHT` | `800` / `600` | 窗口大小 |
-| `BLACKHOLE_RENDER_SCALE` | `1.0` | GPU 渲染分辨率相对窗口的比例，范围 `0.25` 到 `4.0` |
+| `BLACKHOLE_RENDER_SCALE` | `0.32` | GPU 渲染分辨率相对窗口的比例，范围 `0.25` 到 `4.0` |
 | `BLACKHOLE_RENDER_WIDTH` / `BLACKHOLE_RENDER_HEIGHT` | 窗口大小乘比例 | 显式指定 GPU 渲染分辨率 |
-| `BLACKHOLE_RAYTRACE` | `0` | 设为 `1` 开启 GPU 光追 |
-| `BLACKHOLE_MAX_STEPS` | `16000` | 每条光线的最大测地线积分步数 |
-| `BLACKHOLE_TAA_SAMPLES` | `0` | 开启光追时的时间累积上限；`0` 表示不设上限 |
+| `BLACKHOLE_RAYTRACE` | `1` | 设为 `0` 使用轻量光栅 fallback |
+| `BLACKHOLE_MAX_STEPS` | `6144` | 每条光线的最大测地线积分步数 |
+| `BLACKHOLE_TAA_SAMPLES` | `4` | 开启光追时的时间累积上限；`0` 表示不设上限 |
 | `BLACKHOLE_TARGET_FPS` | `30` | 目标帧率；`0` 表示不限帧 |
 | `BLACKHOLE_VSYNC` | `0` | 设为 `1` 开启垂直同步 |
 

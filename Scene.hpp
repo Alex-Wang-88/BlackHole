@@ -10,13 +10,16 @@ struct GLFWwindow;
 
 inline constexpr int DEFAULT_WINDOW_WIDTH = 800;
 inline constexpr int DEFAULT_WINDOW_HEIGHT = 600;
-inline constexpr int DEFAULT_RENDER_WIDTH = 800;
-inline constexpr int DEFAULT_RENDER_HEIGHT = 600;
-inline constexpr std::uint32_t DEFAULT_MAX_STEPS = 16000;
-inline constexpr std::uint32_t DEFAULT_TEMPORAL_SAMPLE_LIMIT = 0;
+inline constexpr float DEFAULT_RENDER_SCALE = 0.32f;
+inline constexpr int DEFAULT_RENDER_WIDTH = 256;
+inline constexpr int DEFAULT_RENDER_HEIGHT = 192;
+inline constexpr std::uint32_t DEFAULT_MAX_STEPS = 6144;
+inline constexpr std::uint32_t DEFAULT_TEMPORAL_SAMPLE_LIMIT = 4;
 inline constexpr int DEFAULT_TARGET_FPS = 30;
-inline constexpr bool DEFAULT_RAYTRACING = false;
-inline constexpr double D_LAMBDA_METERS = 5.0e7;
+inline constexpr bool DEFAULT_RAYTRACING = true;
+// A larger integration step lets the reduced-step Windows preset traverse
+// the camera-to-disk distance without running thousands of empty iterations.
+inline constexpr double D_LAMBDA_METERS = 1.0e8;
 inline constexpr double ESCAPE_R_METERS = 8.0e11;
 inline constexpr float DISK_R1_RS = 3.0f;
 inline constexpr float DISK_R2_RS = 4.5f;

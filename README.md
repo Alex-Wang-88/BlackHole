@@ -13,8 +13,11 @@ compositor.
   compute-shader backend.
 - Kept the heavy ray integration on the GPU and removed the GPU-to-CPU-to-GPU
   frame copy.
-- Ray tracing can be disabled for a lightweight raster black-hole silhouette
-  and grid view.
+- GPU ray tracing is enabled by default with a 256×192 working resolution,
+  6144 integration steps, and four temporal samples for a smoother 30 FPS
+  preset on the tested RTX 5060 Laptop GPU.
+- Ray tracing can still be disabled for a lightweight raster black-hole
+  silhouette and grid view.
 - The default target is 30 FPS. VSync remains disabled so the application uses
   its own stable frame pacing.
 - Added discrete-GPU preference exports for NVIDIA Optimus and AMD PowerXpress
@@ -57,11 +60,11 @@ All settings are optional environment variables:
 | Variable | Default | Meaning |
 | --- | ---: | --- |
 | `BLACKHOLE_WINDOW_WIDTH` / `BLACKHOLE_WINDOW_HEIGHT` | `800` / `600` | Window size |
-| `BLACKHOLE_RENDER_SCALE` | `1.0` | GPU render size relative to the window, `0.25` to `4.0` |
+| `BLACKHOLE_RENDER_SCALE` | `0.32` | GPU render size relative to the window, `0.25` to `4.0` |
 | `BLACKHOLE_RENDER_WIDTH` / `BLACKHOLE_RENDER_HEIGHT` | scaled window size | Explicit GPU render size |
-| `BLACKHOLE_RAYTRACE` | `0` | Set to `1` to enable the GPU ray tracer |
-| `BLACKHOLE_MAX_STEPS` | `16000` | Maximum geodesic integration steps per ray |
-| `BLACKHOLE_TAA_SAMPLES` | `0` | Temporal accumulation limit when ray tracing is enabled; `0` means unlimited |
+| `BLACKHOLE_RAYTRACE` | `1` | Set to `0` to use the lightweight raster fallback |
+| `BLACKHOLE_MAX_STEPS` | `6144` | Maximum geodesic integration steps per ray |
+| `BLACKHOLE_TAA_SAMPLES` | `4` | Temporal accumulation limit when ray tracing is enabled; `0` means unlimited |
 | `BLACKHOLE_TARGET_FPS` | `30` | Frame-rate target; `0` means unlimited |
 | `BLACKHOLE_VSYNC` | `0` | Set to `1` to enable VSync |
 

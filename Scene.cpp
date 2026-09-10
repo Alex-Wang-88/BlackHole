@@ -90,7 +90,7 @@ bool readBooleanEnvironment(const char* name, bool fallback)
 float readScaleEnvironment()
 {
     const char* value = std::getenv("BLACKHOLE_RENDER_SCALE");
-    if(value == nullptr || *value == '\0') return 1.0f;
+    if(value == nullptr || *value == '\0') return DEFAULT_RENDER_SCALE;
 
     char* end = nullptr;
     const float parsed = std::strtof(value, &end);
@@ -99,7 +99,7 @@ float readScaleEnvironment()
     {
         std::cerr << "Ignoring invalid BLACKHOLE_RENDER_SCALE='" << value
                   << "' (expected 0.25..4.0)\n";
-        return 1.0f;
+        return DEFAULT_RENDER_SCALE;
     }
 
     return parsed;

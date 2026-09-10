@@ -7,7 +7,14 @@
 #include <chrono>
 #include <filesystem>
 #include <iostream>
+#include <memory>
 #include <string>
+#include <thread>
+
+#ifdef _WIN32
+#include <mmsystem.h>
+#pragma comment(lib, "winmm.lib")
+#endif
 
 #ifdef _WIN32
 // Ask Windows hybrid-GPU systems to prefer the discrete adapter for this
@@ -22,6 +29,22 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 
 namespace
 {
+#ifdef _WIN32
+class TimerResolutionGuard
+{
+public:
+    TimerResolutionGuard()
+    {
+        timeBeginPeriod(1);
+    }
+
+    ~TimerResolutionGuard()
+    {
+        timeEndPeriod(1);
+    }
+};
+#endif
+
 std::string resolveShaderPath(const char* executablePath)
 {
     namespace fs = std::filesystem;
@@ -37,6 +60,29 @@ std::string resolveShaderPath(const char* executablePath)
 
     return nextToExecutable.string();
 }
+
+template<typename Clock>
+void paceUntil(typename Clock::time_point deadline)
+{
+    while(true)
+    {
+        const auto now = Clock::now();
+        if(now >= deadline) return;
+
+        const auto remaining = deadline - now;
+        if(remaining > std::chrono::milliseconds(2))
+        {
+            // Leave a small tail for a precise yield/spin. This avoids the
+            // several-millisecond oversleep that is common on Windows.
+            std::this_thread::sleep_for(
+                remaining - std::chrono::milliseconds(1));
+        }
+        else
+        {
+            std::this_thread::yield();
+        }
+    }
+}
 }
 
 int main(int argc, char** argv)
@@ -45,29 +91,51 @@ int main(int argc, char** argv)
     {
         const RenderSettings settings = loadRenderSettings();
         Engine engine(settings);
-        GpuRayTracer gpuRayTracer(
-            engine.colorTexture(),
-            engine.materialTexture(),
-            engine.RENDER_WIDTH,
-            engine.RENDER_HEIGHT,
-            settings.maxSteps,
-            settings.temporalSampleLimit,
-            resolveShaderPath(argc > 0 ? argv[0] : nullptr));
+        std::unique_ptr<GpuRayTracer> gpuRayTracer;
+        if(settings.rayTracing)
+        {
+            gpuRayTracer = std::make_unique<GpuRayTracer>(
+                engine.colorTexture(),
+                engine.materialTexture(),
+                engine.RENDER_WIDTH,
+                engine.RENDER_HEIGHT,
+                settings.maxSteps,
+                settings.temporalSampleLimit,
+                resolveShaderPath(argc > 0 ? argv[0] : nullptr));
+        }
         setupCameraCallbacks(engine.window);
 
         std::cout << "Window: " << engine.WIDTH << " x " << engine.HEIGHT
                   << "\n";
+        std::cout << "Ray tracing: " << (settings.rayTracing ? "on" : "off")
+                  << "\n";
         std::cout << "VSync: " << (settings.vsync ? "on" : "off") << "\n";
+        std::cout << "Target FPS: " << (settings.targetFps == 0 ? "unlimited" :
+                                          std::to_string(settings.targetFps))
+                  << "\n";
 
         using Clock = std::chrono::steady_clock;
+#ifdef _WIN32
+        TimerResolutionGuard timerResolution;
+#endif
         int frameCount = 0;
         double lastPrintTime = std::chrono::duration<double>(
             Clock::now().time_since_epoch()).count();
+        const auto frameBudget = settings.targetFps > 0
+            ? std::chrono::duration_cast<Clock::duration>(
+                  std::chrono::duration<double>(1.0 / settings.targetFps))
+            : Clock::duration::zero();
 
         while(!glfwWindowShouldClose(engine.window))
         {
-            gpuRayTracer.render(engine.WIDTH, engine.HEIGHT);
+            const auto frameStart = Clock::now();
+
+            if(gpuRayTracer)
+                gpuRayTracer->render(engine.WIDTH, engine.HEIGHT);
             engine.renderScene(SagA.r_s);
+
+            if(frameBudget > Clock::duration::zero())
+                paceUntil<Clock>(frameStart + frameBudget);
 
             ++frameCount;
             const double currentTime = std::chrono::duration<double>(

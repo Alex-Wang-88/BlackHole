@@ -147,6 +147,14 @@ RenderSettings loadRenderSettings()
         DEFAULT_TEMPORAL_SAMPLE_LIMIT,
         0,
         1000000);
+    settings.targetFps = readIntEnvironment(
+        "BLACKHOLE_TARGET_FPS",
+        DEFAULT_TARGET_FPS,
+        0,
+        1000);
+    settings.rayTracing = readBooleanEnvironment(
+        "BLACKHOLE_RAYTRACE",
+        DEFAULT_RAYTRACING);
     settings.vsync = readBooleanEnvironment("BLACKHOLE_VSYNC", false);
 
     return settings;

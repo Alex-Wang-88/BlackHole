@@ -8,7 +8,8 @@
 
 - 用 OpenGL 4.3 Compute Shader 替换了 macOS 专用的 Metal 和 Objective-C++ 路径。
 - 测地线积分仍全部放在显卡上，并移除了“显卡 → CPU → 显卡”的每帧回读/上传。
-- 默认关闭垂直同步，没有人为 FPS 休眠，也不会在 8 帧后停止渲染。
+- 光追可以关闭，关闭后使用轻量的三维网格视图。
+- 默认目标帧率为 30 FPS。VSync 仍关闭，由程序自身稳定限帧。
 - 为 NVIDIA Optimus 和 AMD PowerXpress 笔记本增加了优先选择独立显卡的导出标记。
 - 分辨率、积分步数、时间累积采样数和垂直同步均可通过环境变量调整。
 
@@ -48,8 +49,10 @@ cmake --build build --config Release --parallel
 | `BLACKHOLE_WINDOW_WIDTH` / `BLACKHOLE_WINDOW_HEIGHT` | `800` / `600` | 窗口大小 |
 | `BLACKHOLE_RENDER_SCALE` | `1.0` | GPU 渲染分辨率相对窗口的比例，范围 `0.25` 到 `4.0` |
 | `BLACKHOLE_RENDER_WIDTH` / `BLACKHOLE_RENDER_HEIGHT` | 窗口大小乘比例 | 显式指定 GPU 渲染分辨率 |
+| `BLACKHOLE_RAYTRACE` | `0` | 设为 `1` 开启 GPU 光追 |
 | `BLACKHOLE_MAX_STEPS` | `16000` | 每条光线的最大测地线积分步数 |
-| `BLACKHOLE_TAA_SAMPLES` | `0` | 时间累积上限；`0` 表示不设上限 |
+| `BLACKHOLE_TAA_SAMPLES` | `0` | 开启光追时的时间累积上限；`0` 表示不设上限 |
+| `BLACKHOLE_TARGET_FPS` | `30` | 目标帧率；`0` 表示不限帧 |
 | `BLACKHOLE_VSYNC` | `0` | 设为 `1` 开启垂直同步 |
 
 例如使用 2560×1600 GPU 渲染并保持不限帧：
@@ -69,7 +72,7 @@ $env:BLACKHOLE_VSYNC = '0'
 - `Shift` + 鼠标左键拖动：平移相机目标
 - 鼠标滚轮：拉近或拉远
 
-移动相机会清空时间累积。默认不限采样时，相机停止后画面会继续细化。
+移动相机会清空时间累积。关闭光追时，光追图层透明，只保留三维透视网格。
 
 ## 项目结构
 

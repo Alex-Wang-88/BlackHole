@@ -14,6 +14,8 @@ inline constexpr int DEFAULT_RENDER_WIDTH = 800;
 inline constexpr int DEFAULT_RENDER_HEIGHT = 600;
 inline constexpr std::uint32_t DEFAULT_MAX_STEPS = 16000;
 inline constexpr std::uint32_t DEFAULT_TEMPORAL_SAMPLE_LIMIT = 0;
+inline constexpr int DEFAULT_TARGET_FPS = 30;
+inline constexpr bool DEFAULT_RAYTRACING = false;
 inline constexpr double D_LAMBDA_METERS = 5.0e7;
 inline constexpr double ESCAPE_R_METERS = 8.0e11;
 inline constexpr float DISK_R1_RS = 3.0f;
@@ -30,6 +32,8 @@ struct RenderSettings
     // Zero means keep accumulating instead of stopping after a fixed number
     // of temporal samples.
     std::uint32_t temporalSampleLimit = DEFAULT_TEMPORAL_SAMPLE_LIMIT;
+    int targetFps = DEFAULT_TARGET_FPS;
+    bool rayTracing = DEFAULT_RAYTRACING;
     bool vsync = false;
 };
 

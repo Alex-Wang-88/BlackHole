@@ -55,6 +55,12 @@ GLuint linkProgram(GLuint vertexShader, GLuint fragmentShader, const char* label
 
 void configureRayTexture(GLuint& texture, int width, int height)
 {
+    const std::vector<unsigned char> clearPixels(
+        static_cast<std::size_t>(width) *
+            static_cast<std::size_t>(height) *
+            4u,
+        0);
+
     glGenTextures(1, &texture);
     glBindTexture(GL_TEXTURE_2D, texture);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -70,7 +76,7 @@ void configureRayTexture(GLuint& texture, int width, int height)
         0,
         GL_RGBA,
         GL_UNSIGNED_BYTE,
-        nullptr);
+        clearPixels.data());
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 }
@@ -114,6 +120,13 @@ Engine::Engine(const RenderSettings& settings)
         glfwTerminate();
         std::exit(EXIT_FAILURE);
     }
+
+    const char* renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+    const char* version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+    std::cout << "OpenGL GPU: " << (renderer != nullptr ? renderer : "unknown")
+              << "\n";
+    std::cout << "OpenGL version: " << (version != nullptr ? version : "unknown")
+              << "\n";
 
     shaderProgram = createShaderProgram();
     gridShaderProgram = createGridShaderProgram();

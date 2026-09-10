@@ -13,8 +13,9 @@ compositor.
   compute-shader backend.
 - Kept the heavy ray integration on the GPU and removed the GPU-to-CPU-to-GPU
   frame copy.
-- Disabled vertical sync by default; there is no artificial FPS sleep or
-  eight-frame render stop.
+- Ray tracing can be disabled for a lightweight grid-only view.
+- The default target is 30 FPS. VSync remains disabled so the application uses
+  its own stable frame pacing.
 - Added discrete-GPU preference exports for NVIDIA Optimus and AMD PowerXpress
   laptops.
 - Added runtime settings for resolution, integration steps, temporal samples,
@@ -57,8 +58,10 @@ All settings are optional environment variables:
 | `BLACKHOLE_WINDOW_WIDTH` / `BLACKHOLE_WINDOW_HEIGHT` | `800` / `600` | Window size |
 | `BLACKHOLE_RENDER_SCALE` | `1.0` | GPU render size relative to the window, `0.25` to `4.0` |
 | `BLACKHOLE_RENDER_WIDTH` / `BLACKHOLE_RENDER_HEIGHT` | scaled window size | Explicit GPU render size |
+| `BLACKHOLE_RAYTRACE` | `0` | Set to `1` to enable the GPU ray tracer |
 | `BLACKHOLE_MAX_STEPS` | `16000` | Maximum geodesic integration steps per ray |
-| `BLACKHOLE_TAA_SAMPLES` | `0` | Temporal accumulation limit; `0` means unlimited |
+| `BLACKHOLE_TAA_SAMPLES` | `0` | Temporal accumulation limit when ray tracing is enabled; `0` means unlimited |
+| `BLACKHOLE_TARGET_FPS` | `30` | Frame-rate target; `0` means unlimited |
 | `BLACKHOLE_VSYNC` | `0` | Set to `1` to enable VSync |
 
 For example, to render at 2560×1600 with VSync disabled:
@@ -79,8 +82,8 @@ removing it entirely would allow a bad ray or driver timeout to hang the GPU.
 - `Shift` + left mouse drag: pan the camera target
 - Mouse wheel: zoom in or out
 
-Camera movement resets temporal accumulation. With the default unlimited mode,
-the image continues to refine while the camera is still.
+Camera movement resets temporal accumulation. With ray tracing disabled, the
+ray-traced layer is transparent and the 3D perspective grid remains visible.
 
 ## Project structure
 

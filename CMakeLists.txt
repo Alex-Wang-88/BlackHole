@@ -45,6 +45,10 @@ target_link_libraries(
     glm::glm
     OpenGL::GL)
 
+if(WIN32)
+    target_link_libraries(BlackHole PRIVATE winmm)
+endif()
+
 if(MSVC)
     target_compile_definitions(BlackHole PRIVATE _CRT_SECURE_NO_WARNINGS)
     target_compile_options(BlackHole PRIVATE /W4 /permissive-)

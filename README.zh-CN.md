@@ -2,68 +2,66 @@
 
 [English](README.md) | **简体中文**
 
-一个面向 macOS 的实时黑洞可视化项目。光线追踪部分运行在 Metal compute shader 上，窗口、三维透视网格和最终画面合成由 OpenGL 完成。
+这是一个可以在 Windows、Linux 以及其他支持 OpenGL 4.3 的系统上运行的实时黑洞可视化程序。光线追踪在 GPU 上通过 OpenGL Compute Shader 执行，并直接写入 OpenGL 合成阶段使用的纹理。
 
-## 功能
+## 针对 Windows/GPU 的改动
 
-- Schwarzschild 黑洞及事件视界
-- 沿弯曲测地线追踪的吸积盘
-- 可被引力透镜拉伸成多个弧形像的球体
-- 独立于光线追踪器绘制的真实三维 wireframe grid
-- 8 帧时间抗锯齿和按材质区分强度的 FXAA
-
-## 渲染结构
-
-Metal 以 `400 × 300` 分辨率计算黑洞、吸积盘和球体，同时输出 RGBA 图像与材质掩码。OpenGL 将结果放大到 `800 × 600` 窗口，对不同材质使用不同强度的边缘处理，再与三维透视网格合成。
-
-主要视觉和计算参数集中在 `Scene.hpp`，包括积分步数、步长、逃逸半径、吸积盘半径和网格尺寸。
-
-## 项目结构
-
-```text
-BlackHole.mm           程序入口和渲染循环
-Scene.hpp/.cpp         相机、黑洞、对象和场景参数
-Engine.hpp/.cpp        GLFW 窗口、OpenGL 合成和三维网格
-MetalRayTracer.hpp/.mm Metal compute shader 与测地线追踪
-CMakeLists.txt         CMake 构建配置
-run.sh                 独立 clang++ 编译运行脚本
-GPUinfoFile/           GPU 信息采集工具源码
-Draft/                 早期实验版本
-```
+- 用 OpenGL 4.3 Compute Shader 替换了 macOS 专用的 Metal 和 Objective-C++ 路径。
+- 测地线积分仍全部放在显卡上，并移除了“显卡 → CPU → 显卡”的每帧回读/上传。
+- 默认关闭垂直同步，没有人为 FPS 休眠，也不会在 8 帧后停止渲染。
+- 为 NVIDIA Optimus 和 AMD PowerXpress 笔记本增加了优先选择独立显卡的导出标记。
+- 分辨率、积分步数、时间累积采样数和垂直同步均可通过环境变量调整。
 
 ## 环境要求
 
-- 支持 Metal 的 Mac
-- Xcode 或 Xcode Command Line Tools
-- Homebrew
-- C++17 编译器
+- Windows 10/11、Linux 或其他支持 OpenGL 4.3 的系统
+- 能提供 OpenGL 4.3 Compute Shader 的显卡驱动
+- Visual Studio 2022 C++ 工具，或其他 C++17 编译器
+- CMake 3.20 以上
+- Git（第一次配置时 CMake 会自动下载 GLFW 和 GLM）
 
-安装依赖：
+## Windows 快速运行
 
-```bash
-brew install cmake glfw glew glm
+在 PowerShell 中执行：
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\run.ps1
 ```
 
-## 快速运行
+也可以手动构建：
 
-`run.sh` 会直接调用 `clang++`，将当前全部模块编译为项目根目录下的 `BlackHole`，随后启动程序。这个流程不调用 CMake。
-
-```bash
-chmod +x run.sh
-./run.sh
+```powershell
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+cmake --build build --config Release --parallel
+.\build\Release\BlackHole.exe
 ```
 
-脚本会自动定位项目目录和 Homebrew 安装路径，因此可以从任意工作目录启动。
+构建后，程序会把 `raytrace.comp` 复制到 EXE 同目录，因此也可以直接进入 `Release` 文件夹双击运行。
 
-## 使用 CMake 构建
+## 运行参数
 
-```bash
-cmake -S . -B build
-cmake --build build
-./build/BlackHole
+所有参数都是可选的环境变量：
+
+| 变量 | 默认值 | 作用 |
+| --- | ---: | --- |
+| `BLACKHOLE_WINDOW_WIDTH` / `BLACKHOLE_WINDOW_HEIGHT` | `800` / `600` | 窗口大小 |
+| `BLACKHOLE_RENDER_SCALE` | `1.0` | GPU 渲染分辨率相对窗口的比例，范围 `0.25` 到 `4.0` |
+| `BLACKHOLE_RENDER_WIDTH` / `BLACKHOLE_RENDER_HEIGHT` | 窗口大小乘比例 | 显式指定 GPU 渲染分辨率 |
+| `BLACKHOLE_MAX_STEPS` | `16000` | 每条光线的最大测地线积分步数 |
+| `BLACKHOLE_TAA_SAMPLES` | `0` | 时间累积上限；`0` 表示不设上限 |
+| `BLACKHOLE_VSYNC` | `0` | 设为 `1` 开启垂直同步 |
+
+例如使用 2560×1600 GPU 渲染并保持不限帧：
+
+```powershell
+$env:BLACKHOLE_RENDER_WIDTH = '2560'
+$env:BLACKHOLE_RENDER_HEIGHT = '1600'
+$env:BLACKHOLE_VSYNC = '0'
+.\build\Release\BlackHole.exe
 ```
 
-CMake 构建产物位于 `build/`。这种方式适合 IDE 集成以及查看详细构建信息。
+`BLACKHOLE_MAX_STEPS` 保留的是数值积分的安全上限，不是 FPS 限制；完全删除它可能导致异常光线或驱动超时，进而卡死显卡。
 
 ## 操作方式
 
@@ -71,4 +69,17 @@ CMake 构建产物位于 `build/`。这种方式适合 IDE 集成以及查看详
 - `Shift` + 鼠标左键拖动：平移相机目标
 - 鼠标滚轮：拉近或拉远
 
-相机移动时，时间累积会立即清空；停止移动后，画面会在 8 帧内重新收敛。
+移动相机会清空时间累积。默认不限采样时，相机停止后画面会继续细化。
+
+## 项目结构
+
+```text
+BlackHole.cpp          跨平台入口和渲染循环
+Scene.hpp/.cpp         相机、黑洞、场景常量和运行参数
+Engine.hpp/.cpp        GLFW 窗口、OpenGL 合成和三维网格
+GpuRayTracer.hpp/.cpp  OpenGL Compute 调度和 GPU 缓冲区
+OpenGLLoader.*         基于 GLFW 的现代 OpenGL 函数加载器
+shaders/raytrace.comp  GPU 测地线光线追踪 Compute Shader
+CMakeLists.txt         跨平台 CMake 构建配置
+Draft/                 早期实验代码，不参与构建
+```

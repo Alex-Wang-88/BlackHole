@@ -2,68 +2,76 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-A real-time black hole visualization for macOS. The ray-tracing stage runs in a Metal compute shader, while OpenGL handles the window, the three-dimensional perspective grid, and final image compositing.
+A real-time black-hole visualization that runs on Windows, Linux, and other
+OpenGL 4.3-capable systems. The ray-tracing stage runs in an OpenGL compute
+shader on the GPU, and writes directly into the textures used by the OpenGL
+compositor.
 
-## Features
+## What changed for Windows/GPU
 
-- Schwarzschild black hole and event horizon
-- Accretion disk traced along curved geodesics
-- A sphere whose gravitationally lensed image can stretch into multiple arcs
-- A real three-dimensional wireframe grid rendered independently from the ray tracer
-- Eight-frame temporal anti-aliasing and material-aware FXAA
-
-## Rendering Architecture
-
-Metal traces the black hole, accretion disk, and sphere at `400 × 300`. It produces both an RGBA image and a material mask. OpenGL upscales the result to an `800 × 600` window, applies material-specific edge treatment, and composites it over the perspective grid.
-
-The main visual and simulation constants live in `Scene.hpp`, including the integration step count, step length, escape radius, accretion disk radii, and grid dimensions.
-
-## Project Structure
-
-```text
-BlackHole.mm           Application entry point and render loop
-Scene.hpp/.cpp         Camera, black hole, objects, and scene constants
-Engine.hpp/.cpp        GLFW window, OpenGL compositor, and 3D grid
-MetalRayTracer.hpp/.mm Metal compute shader and geodesic ray tracing
-CMakeLists.txt         CMake build configuration
-run.sh                 Standalone clang++ build-and-run script
-GPUinfoFile/           GPU information utility sources
-Draft/                 Earlier experimental implementation
-```
+- Replaced the macOS-only Metal and Objective-C++ path with an OpenGL 4.3
+  compute-shader backend.
+- Kept the heavy ray integration on the GPU and removed the GPU-to-CPU-to-GPU
+  frame copy.
+- Disabled vertical sync by default; there is no artificial FPS sleep or
+  eight-frame render stop.
+- Added discrete-GPU preference exports for NVIDIA Optimus and AMD PowerXpress
+  laptops.
+- Added runtime settings for resolution, integration steps, temporal samples,
+  and VSync.
 
 ## Requirements
 
-- A Metal-capable Mac
-- Xcode or Xcode Command Line Tools
-- Homebrew
-- A C++17 compiler
+- Windows 10/11, Linux, or another OpenGL 4.3-capable system
+- A GPU driver exposing OpenGL 4.3 compute shaders
+- Visual Studio 2022 C++ tools or another C++17 compiler
+- CMake 3.20 or newer
+- Git (CMake downloads GLFW and GLM on the first configure)
 
-Install the required packages:
+## Quick start on Windows
 
-```bash
-brew install cmake glfw glew glm
+From PowerShell:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\run.ps1
 ```
 
-## Quick Start
+Or build manually:
 
-`run.sh` invokes `clang++` directly, compiles all current modules into `BlackHole` in the project root, and launches the application. This path does not invoke CMake.
-
-```bash
-chmod +x run.sh
-./run.sh
+```powershell
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+cmake --build build --config Release --parallel
+.\build\Release\BlackHole.exe
 ```
 
-The script resolves its own directory and the Homebrew prefix, so it can be launched from any working directory.
+The executable and `raytrace.comp` are placed together, so launching the EXE
+from its Release directory also works.
 
-## Build with CMake
+## Runtime settings
 
-```bash
-cmake -S . -B build
-cmake --build build
-./build/BlackHole
+All settings are optional environment variables:
+
+| Variable | Default | Meaning |
+| --- | ---: | --- |
+| `BLACKHOLE_WINDOW_WIDTH` / `BLACKHOLE_WINDOW_HEIGHT` | `800` / `600` | Window size |
+| `BLACKHOLE_RENDER_SCALE` | `1.0` | GPU render size relative to the window, `0.25` to `4.0` |
+| `BLACKHOLE_RENDER_WIDTH` / `BLACKHOLE_RENDER_HEIGHT` | scaled window size | Explicit GPU render size |
+| `BLACKHOLE_MAX_STEPS` | `16000` | Maximum geodesic integration steps per ray |
+| `BLACKHOLE_TAA_SAMPLES` | `0` | Temporal accumulation limit; `0` means unlimited |
+| `BLACKHOLE_VSYNC` | `0` | Set to `1` to enable VSync |
+
+For example, to render at 2560×1600 with VSync disabled:
+
+```powershell
+$env:BLACKHOLE_RENDER_WIDTH = '2560'
+$env:BLACKHOLE_RENDER_HEIGHT = '1600'
+$env:BLACKHOLE_VSYNC = '0'
+.\build\Release\BlackHole.exe
 ```
 
-CMake places its output in `build/`. This workflow is useful for IDE integration and detailed build diagnostics.
+`BLACKHOLE_MAX_STEPS` remains a safety bound for the numerical integrator;
+removing it entirely would allow a bad ray or driver timeout to hang the GPU.
 
 ## Controls
 
@@ -71,4 +79,18 @@ CMake places its output in `build/`. This workflow is useful for IDE integration
 - `Shift` + left mouse drag: pan the camera target
 - Mouse wheel: zoom in or out
 
-Camera movement resets temporal accumulation immediately. Once the camera stops, the image converges again over eight frames.
+Camera movement resets temporal accumulation. With the default unlimited mode,
+the image continues to refine while the camera is still.
+
+## Project structure
+
+```text
+BlackHole.cpp          Cross-platform application entry point and render loop
+Scene.hpp/.cpp         Camera, black hole, scene constants, and settings
+Engine.hpp/.cpp        GLFW window, OpenGL compositor, and 3D grid
+GpuRayTracer.hpp/.cpp  OpenGL compute dispatch and GPU storage buffers
+OpenGLLoader.*         Small GLFW-based loader for modern OpenGL entry points
+shaders/raytrace.comp  GPU geodesic ray-tracing compute shader
+CMakeLists.txt         Cross-platform CMake build configuration
+Draft/                 Earlier experimental implementation, not built
+```

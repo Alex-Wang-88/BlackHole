@@ -8,14 +8,32 @@
 
 struct GLFWwindow;
 
-inline constexpr int METAL_RENDER_WIDTH = 400;
-inline constexpr int METAL_RENDER_HEIGHT = 300;
-inline constexpr std::uint32_t TEMPORAL_SAMPLE_COUNT = 8;
-inline constexpr std::uint32_t METAL_MAX_STEPS = 16000;
-inline constexpr double METAL_D_LAMBDA_METERS = 5.0e7;
-inline constexpr double METAL_ESCAPE_R_METERS = 8.0e11;
-inline constexpr float METAL_DISK_R1_RS = 3.0f;
-inline constexpr float METAL_DISK_R2_RS = 4.5f;
+inline constexpr int DEFAULT_WINDOW_WIDTH = 800;
+inline constexpr int DEFAULT_WINDOW_HEIGHT = 600;
+inline constexpr int DEFAULT_RENDER_WIDTH = 800;
+inline constexpr int DEFAULT_RENDER_HEIGHT = 600;
+inline constexpr std::uint32_t DEFAULT_MAX_STEPS = 16000;
+inline constexpr std::uint32_t DEFAULT_TEMPORAL_SAMPLE_LIMIT = 0;
+inline constexpr double D_LAMBDA_METERS = 5.0e7;
+inline constexpr double ESCAPE_R_METERS = 8.0e11;
+inline constexpr float DISK_R1_RS = 3.0f;
+inline constexpr float DISK_R2_RS = 4.5f;
+
+struct RenderSettings
+{
+    int windowWidth = DEFAULT_WINDOW_WIDTH;
+    int windowHeight = DEFAULT_WINDOW_HEIGHT;
+    int renderWidth = DEFAULT_RENDER_WIDTH;
+    int renderHeight = DEFAULT_RENDER_HEIGHT;
+    std::uint32_t maxSteps = DEFAULT_MAX_STEPS;
+
+    // Zero means keep accumulating instead of stopping after a fixed number
+    // of temporal samples.
+    std::uint32_t temporalSampleLimit = DEFAULT_TEMPORAL_SAMPLE_LIMIT;
+    bool vsync = false;
+};
+
+RenderSettings loadRenderSettings();
 
 inline constexpr int GRID_HALF_CELLS = 32;
 inline constexpr float GRID_STEP_RS = 1.5f;
@@ -70,7 +88,7 @@ struct alignas(16) Object
     float velocityPadding;
 };
 
-static_assert(sizeof(Object) == 64, "Object must match the Metal buffer layout");
+static_assert(sizeof(Object) == 64, "Object must match the GPU buffer layout");
 
 extern Camera camera;
 extern BlackHole SagA;

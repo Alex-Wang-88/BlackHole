@@ -1,82 +1,58 @@
-cmake_minimum_required(VERSION 3.15)
+cmake_minimum_required(VERSION 3.20)
 
-project(BlackHoleProject LANGUAGES CXX OBJCXX)
+project(BlackHoleProject LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_OBJCXX_STANDARD 17)
-set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
-set(CMAKE_OBJCXX_EXTENSIONS OFF)
 
-if(NOT APPLE)
-    message(FATAL_ERROR "BlackHole requires macOS, Metal, and Cocoa")
-endif()
+include(FetchContent)
 
-if(EXISTS "/opt/homebrew")
-    list(APPEND CMAKE_PREFIX_PATH "/opt/homebrew")
-endif()
+set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    glfw
+    GIT_REPOSITORY https://github.com/glfw/glfw.git
+    GIT_TAG 3.4
+    GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(glfw)
+
+set(GLM_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    glm
+    GIT_REPOSITORY https://github.com/g-truc/glm.git
+    GIT_TAG 1.0.1
+    GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(glm)
 
 find_package(OpenGL REQUIRED)
-find_package(glfw3 CONFIG REQUIRED)
-find_package(glm CONFIG REQUIRED)
-
-find_path(BLACKHOLE_GLEW_INCLUDE_DIR NAMES GL/glew.h)
-find_library(BLACKHOLE_GLEW_LIBRARY NAMES GLEW)
-
-if(NOT BLACKHOLE_GLEW_INCLUDE_DIR OR NOT BLACKHOLE_GLEW_LIBRARY)
-    message(FATAL_ERROR "GLEW headers and library are required")
-endif()
-
-find_library(COCOA_FRAMEWORK Cocoa)
-find_library(COREVIDEO_FRAMEWORK CoreVideo)
-find_library(FOUNDATION_FRAMEWORK Foundation)
-find_library(IOKIT_FRAMEWORK IOKit)
-find_library(METAL_FRAMEWORK Metal)
 
 add_executable(
     BlackHole
-    BlackHole.mm
+    BlackHole.cpp
     Scene.cpp
     Engine.cpp
-    MetalRayTracer.mm
-)
+    GpuRayTracer.cpp
+    OpenGLLoader.cpp)
 
-target_include_directories(
-    BlackHole
-    PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${BLACKHOLE_GLEW_INCLUDE_DIR}
-)
-
+target_include_directories(BlackHole PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(
     BlackHole
     PRIVATE
     glfw
-    ${BLACKHOLE_GLEW_LIBRARY}
     glm::glm
-    OpenGL::GL
-    ${COCOA_FRAMEWORK}
-    ${COREVIDEO_FRAMEWORK}
-    ${FOUNDATION_FRAMEWORK}
-    ${IOKIT_FRAMEWORK}
-    ${METAL_FRAMEWORK}
-)
+    OpenGL::GL)
 
-target_compile_options(
-    BlackHole
-    PRIVATE
-    $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>
-)
-
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
-    target_compile_options(
-        BlackHole
-        PRIVATE
-        $<$<COMPILE_LANGUAGE:CXX>:-Wall>
-        $<$<COMPILE_LANGUAGE:CXX>:-Wextra>
-        $<$<COMPILE_LANGUAGE:CXX>:-Wpedantic>
-        $<$<COMPILE_LANGUAGE:OBJCXX>:-Wall>
-        $<$<COMPILE_LANGUAGE:OBJCXX>:-Wextra>
-    )
+if(MSVC)
+    target_compile_definitions(BlackHole PRIVATE _CRT_SECURE_NO_WARNINGS)
+    target_compile_options(BlackHole PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(BlackHole PRIVATE -Wall -Wextra -Wpedantic)
 endif()
+
+add_custom_command(TARGET BlackHole POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/raytrace.comp
+        $<TARGET_FILE_DIR:BlackHole>/raytrace.comp)

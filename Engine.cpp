@@ -53,7 +53,7 @@ GLuint linkProgram(GLuint vertexShader, GLuint fragmentShader, const char* label
     return program;
 }
 
-void configureRayTexture(GLuint& texture)
+void configureRayTexture(GLuint& texture, int width, int height)
 {
     glGenTextures(1, &texture);
     glBindTexture(GL_TEXTURE_2D, texture);
@@ -65,8 +65,8 @@ void configureRayTexture(GLuint& texture)
         GL_TEXTURE_2D,
         0,
         GL_RGBA8,
-        METAL_RENDER_WIDTH,
-        METAL_RENDER_HEIGHT,
+        width,
+        height,
         0,
         GL_RGBA,
         GL_UNSIGNED_BYTE,
@@ -75,7 +75,11 @@ void configureRayTexture(GLuint& texture)
 }
 }
 
-Engine::Engine()
+Engine::Engine(const RenderSettings& settings)
+    : WIDTH(settings.windowWidth),
+      HEIGHT(settings.windowHeight),
+      RENDER_WIDTH(settings.renderWidth),
+      RENDER_HEIGHT(settings.renderHeight)
 {
     if(!glfwInit())
     {
@@ -84,7 +88,7 @@ Engine::Engine()
     }
 
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
 #ifdef __APPLE__
@@ -101,12 +105,11 @@ Engine::Engine()
     }
 
     glfwMakeContextCurrent(window);
-    glfwSwapInterval(1);
-    glewExperimental = GL_TRUE;
+    glfwSwapInterval(settings.vsync ? 1 : 0);
 
-    if(glewInit() != GLEW_OK)
+    if(!blackhole::loadOpenGLFunctions())
     {
-        std::cerr << "Failed to initialize GLEW\n";
+        std::cerr << "Failed to load the required OpenGL functions\n";
         glfwDestroyWindow(window);
         glfwTerminate();
         std::exit(EXIT_FAILURE);
@@ -144,8 +147,8 @@ Engine::Engine()
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindVertexArray(0);
 
-    configureRayTexture(texture);
-    configureRayTexture(materialTexture);
+    configureRayTexture(texture, RENDER_WIDTH, RENDER_HEIGHT);
+    configureRayTexture(materialTextureId, RENDER_WIDTH, RENDER_HEIGHT);
 }
 
 GLuint Engine::createShaderProgram()
@@ -344,13 +347,13 @@ void Engine::createPerspectiveGrid()
     glBindBuffer(GL_ARRAY_BUFFER, gridVBO);
     glBufferData(
         GL_ARRAY_BUFFER,
-        static_cast<GLsizeiptr>(vertices.size() * sizeof(glm::vec3)),
+        static_cast<std::ptrdiff_t>(vertices.size() * sizeof(glm::vec3)),
         vertices.data(),
         GL_STATIC_DRAW);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gridEBO);
     glBufferData(
         GL_ELEMENT_ARRAY_BUFFER,
-        static_cast<GLsizeiptr>(indices.size() * sizeof(GLuint)),
+        static_cast<std::ptrdiff_t>(indices.size() * sizeof(GLuint)),
         indices.data(),
         GL_STATIC_DRAW);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), nullptr);
@@ -395,8 +398,6 @@ void Engine::drawPerspectiveGrid(double schwarzschildRadius, float aspect)
 }
 
 void Engine::renderScene(
-    const std::vector<unsigned char>& pixels,
-    const std::vector<unsigned char>& materialPixels,
     double schwarzschildRadius)
 {
     int framebufferWidth = 0;
@@ -407,34 +408,11 @@ void Engine::renderScene(
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+    if(framebufferWidth <= 0 || framebufferHeight <= 0) return;
+
     float aspect = static_cast<float>(framebufferWidth) /
                    static_cast<float>(framebufferHeight);
     drawPerspectiveGrid(schwarzschildRadius, aspect);
-
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, texture);
-    glTexSubImage2D(
-        GL_TEXTURE_2D,
-        0,
-        0,
-        0,
-        METAL_RENDER_WIDTH,
-        METAL_RENDER_HEIGHT,
-        GL_RGBA,
-        GL_UNSIGNED_BYTE,
-        pixels.data());
-
-    glBindTexture(GL_TEXTURE_2D, materialTexture);
-    glTexSubImage2D(
-        GL_TEXTURE_2D,
-        0,
-        0,
-        0,
-        METAL_RENDER_WIDTH,
-        METAL_RENDER_HEIGHT,
-        GL_RGBA,
-        GL_UNSIGNED_BYTE,
-        materialPixels.data());
 
     glDisable(GL_DEPTH_TEST);
     glDepthMask(GL_FALSE);
@@ -447,7 +425,7 @@ void Engine::renderScene(
     glUniform1i(glGetUniformLocation(shaderProgram, "screenTexture"), 0);
 
     glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, materialTexture);
+    glBindTexture(GL_TEXTURE_2D, materialTextureId);
     glUniform1i(glGetUniformLocation(shaderProgram, "materialTexture"), 1);
 
     glBindVertexArray(quadVAO);
@@ -464,7 +442,7 @@ void Engine::renderScene(
 
 Engine::~Engine()
 {
-    if(materialTexture) glDeleteTextures(1, &materialTexture);
+    if(materialTextureId) glDeleteTextures(1, &materialTextureId);
     if(texture) glDeleteTextures(1, &texture);
     if(quadVBO) glDeleteBuffers(1, &quadVBO);
     if(quadVAO) glDeleteVertexArrays(1, &quadVAO);

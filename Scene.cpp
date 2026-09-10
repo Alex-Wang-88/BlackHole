@@ -5,13 +5,151 @@
 #include <glm/common.hpp>
 #include <glm/geometric.hpp>
 
+#include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <iostream>
+#include <string>
 
 namespace
 {
 constexpr double GRAVITATIONAL_CONSTANT = 6.67430e-11;
 constexpr double SPEED_OF_LIGHT = 299792458.0;
 constexpr float PI = 3.14159265358979323846f;
+
+int readIntEnvironment(
+    const char* name,
+    int fallback,
+    int minimum,
+    int maximum)
+{
+    const char* value = std::getenv(name);
+    if(value == nullptr || *value == '\0') return fallback;
+
+    char* end = nullptr;
+    const long parsed = std::strtol(value, &end, 10);
+    if(end == value || *end != '\0' ||
+       parsed < static_cast<long>(minimum) ||
+       parsed > static_cast<long>(maximum))
+    {
+        std::cerr << "Ignoring invalid " << name << "='" << value
+                  << "' (expected " << minimum << ".." << maximum << ")\n";
+        return fallback;
+    }
+
+    return static_cast<int>(parsed);
+}
+
+std::uint32_t readUnsignedEnvironment(
+    const char* name,
+    std::uint32_t fallback,
+    std::uint32_t minimum,
+    std::uint32_t maximum)
+{
+    const char* value = std::getenv(name);
+    if(value == nullptr || *value == '\0') return fallback;
+
+    char* end = nullptr;
+    const unsigned long long parsed = std::strtoull(value, &end, 10);
+    if(end == value || *end != '\0' ||
+       parsed < static_cast<unsigned long long>(minimum) ||
+       parsed > static_cast<unsigned long long>(maximum))
+    {
+        std::cerr << "Ignoring invalid " << name << "='" << value
+                  << "' (expected " << minimum << ".." << maximum << ")\n";
+        return fallback;
+    }
+
+    return static_cast<std::uint32_t>(parsed);
+}
+
+bool readBooleanEnvironment(const char* name, bool fallback)
+{
+    const char* value = std::getenv(name);
+    if(value == nullptr || *value == '\0') return fallback;
+
+    if(std::string(value) == "1" ||
+       std::string(value) == "true" ||
+       std::string(value) == "TRUE" ||
+       std::string(value) == "on" ||
+       std::string(value) == "ON")
+        return true;
+
+    if(std::string(value) == "0" ||
+       std::string(value) == "false" ||
+       std::string(value) == "FALSE" ||
+       std::string(value) == "off" ||
+       std::string(value) == "OFF")
+        return false;
+
+    std::cerr << "Ignoring invalid " << name << "='" << value
+              << "' (expected 0/1)\n";
+    return fallback;
+}
+
+float readScaleEnvironment()
+{
+    const char* value = std::getenv("BLACKHOLE_RENDER_SCALE");
+    if(value == nullptr || *value == '\0') return 1.0f;
+
+    char* end = nullptr;
+    const float parsed = std::strtof(value, &end);
+    if(end == value || *end != '\0' || !std::isfinite(parsed) ||
+       parsed < 0.25f || parsed > 4.0f)
+    {
+        std::cerr << "Ignoring invalid BLACKHOLE_RENDER_SCALE='" << value
+                  << "' (expected 0.25..4.0)\n";
+        return 1.0f;
+    }
+
+    return parsed;
+}
+}
+
+RenderSettings loadRenderSettings()
+{
+    RenderSettings settings;
+
+    settings.windowWidth = readIntEnvironment(
+        "BLACKHOLE_WINDOW_WIDTH",
+        DEFAULT_WINDOW_WIDTH,
+        320,
+        8192);
+    settings.windowHeight = readIntEnvironment(
+        "BLACKHOLE_WINDOW_HEIGHT",
+        DEFAULT_WINDOW_HEIGHT,
+        240,
+        8192);
+
+    const float scale = readScaleEnvironment();
+    const int scaledWidth = static_cast<int>(
+        std::lround(static_cast<float>(settings.windowWidth) * scale));
+    const int scaledHeight = static_cast<int>(
+        std::lround(static_cast<float>(settings.windowHeight) * scale));
+
+    settings.renderWidth = readIntEnvironment(
+        "BLACKHOLE_RENDER_WIDTH",
+        std::clamp(scaledWidth, 64, 8192),
+        64,
+        8192);
+    settings.renderHeight = readIntEnvironment(
+        "BLACKHOLE_RENDER_HEIGHT",
+        std::clamp(scaledHeight, 64, 8192),
+        64,
+        8192);
+    settings.maxSteps = readUnsignedEnvironment(
+        "BLACKHOLE_MAX_STEPS",
+        DEFAULT_MAX_STEPS,
+        64,
+        1000000);
+    settings.temporalSampleLimit = readUnsignedEnvironment(
+        "BLACKHOLE_TAA_SAMPLES",
+        DEFAULT_TEMPORAL_SAMPLE_LIMIT,
+        0,
+        1000000);
+    settings.vsync = readBooleanEnvironment("BLACKHOLE_VSYNC", false);
+
+    return settings;
 }
 
 Camera::Camera()

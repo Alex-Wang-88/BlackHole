@@ -2,23 +2,23 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-A real-time black-hole visualization that runs on Windows, Linux, and other
-OpenGL 4.3-capable systems. The ray-tracing stage runs in an OpenGL compute
-shader on the GPU, and writes directly into the textures used by the OpenGL
-compositor.
+A real-time black-hole visualization for Windows using a native Direct3D 12
+renderer. The ray-tracing stage runs in an HLSL compute shader on the GPU and
+writes directly into UAV textures used by the D3D12 compositor.
 
 ## What changed for Windows/GPU
 
-- Replaced the macOS-only Metal and Objective-C++ path with an OpenGL 4.3
-  compute-shader backend.
+- Replaced the macOS-only Metal and Objective-C++ path with a native D3D12
+  compute and graphics backend.
 - Kept the heavy ray integration on the GPU and removed the GPU-to-CPU-to-GPU
   frame copy.
 - GPU ray tracing is enabled by default with a 256×192 working resolution,
-  6144 integration steps, and four temporal samples for a smoother 30 FPS
-  preset on the tested RTX 5060 Laptop GPU.
+  6144 integration steps, and one temporal sample for a smoother 60 FPS
+  preset on the tested RTX 5060 Laptop GPU. More temporal samples remain
+  available through `BLACKHOLE_TAA_SAMPLES` when image quality is preferred.
 - Ray tracing can still be disabled for a lightweight raster black-hole
   silhouette and grid view.
-- The default target is 30 FPS. VSync remains disabled so the application uses
+- The default target is 60 FPS. VSync remains disabled so the application uses
   its own stable frame pacing.
 - Added discrete-GPU preference exports for NVIDIA Optimus and AMD PowerXpress
   laptops.
@@ -27,11 +27,10 @@ compositor.
 
 ## Requirements
 
-- Windows 10/11, Linux, or another OpenGL 4.3-capable system
-- A GPU driver exposing OpenGL 4.3 compute shaders
+- Windows 10/11 with a Direct3D 12-capable GPU driver
 - Visual Studio 2022 C++ tools or another C++17 compiler
 - CMake 3.20 or newer
-- Git (CMake downloads GLFW and GLM on the first configure)
+- Git (CMake downloads GLM on the first configure)
 
 ## Quick start on Windows
 
@@ -50,8 +49,8 @@ cmake --build build --config Release --parallel
 .\build\Release\BlackHole.exe
 ```
 
-The executable and `raytrace.comp` are placed together, so launching the EXE
-from its Release directory also works.
+The executable and the three HLSL shader files are placed together, so
+launching the EXE from its Release directory also works.
 
 ## Runtime settings
 
@@ -64,8 +63,8 @@ All settings are optional environment variables:
 | `BLACKHOLE_RENDER_WIDTH` / `BLACKHOLE_RENDER_HEIGHT` | scaled window size | Explicit GPU render size |
 | `BLACKHOLE_RAYTRACE` | `1` | Set to `0` to use the lightweight raster fallback |
 | `BLACKHOLE_MAX_STEPS` | `6144` | Maximum geodesic integration steps per ray |
-| `BLACKHOLE_TAA_SAMPLES` | `4` | Temporal accumulation limit when ray tracing is enabled; `0` means unlimited |
-| `BLACKHOLE_TARGET_FPS` | `30` | Frame-rate target; `0` means unlimited |
+| `BLACKHOLE_TAA_SAMPLES` | `1` | Temporal accumulation limit when ray tracing is enabled; `0` means unlimited |
+| `BLACKHOLE_TARGET_FPS` | `60` | Frame-rate target; `0` means unlimited |
 | `BLACKHOLE_VSYNC` | `0` | Set to `1` to enable VSync |
 
 For example, to render at 2560×1600 with VSync disabled:
@@ -93,12 +92,12 @@ the expensive ray-traced layer is transparent.
 ## Project structure
 
 ```text
-BlackHole.cpp          Cross-platform application entry point and render loop
+BlackHole.cpp          Windows application entry point and render loop
 Scene.hpp/.cpp         Camera, black hole, scene constants, and settings
-Engine.hpp/.cpp        GLFW window, OpenGL compositor, and 3D grid
-GpuRayTracer.hpp/.cpp  OpenGL compute dispatch and GPU storage buffers
-OpenGLLoader.*         Small GLFW-based loader for modern OpenGL entry points
-shaders/raytrace.comp  GPU geodesic ray-tracing compute shader
-CMakeLists.txt         Cross-platform CMake build configuration
+D3D12Engine.hpp/.cpp   Win32 window, D3D12 resources, pipelines, and 3D grid
+shaders/raytrace.hlsl  GPU geodesic ray-tracing compute shader
+shaders/scene.hlsl     Perspective grid shaders
+shaders/composite.hlsl Fullscreen compositor and raster fallback
+CMakeLists.txt         Windows D3D12 CMake build configuration
 Draft/                 Earlier experimental implementation, not built
 ```

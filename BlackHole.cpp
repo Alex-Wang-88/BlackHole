@@ -1,13 +1,9 @@
-#include "Engine.hpp"
-#include "GpuRayTracer.hpp"
+#include "D3D12Engine.hpp"
 #include "Scene.hpp"
-
-#include <GLFW/glfw3.h>
 
 #include <chrono>
 #include <filesystem>
 #include <iostream>
-#include <memory>
 #include <string>
 #include <thread>
 
@@ -18,8 +14,7 @@
 
 #ifdef _WIN32
 // Ask Windows hybrid-GPU systems to prefer the discrete adapter for this
-// OpenGL application. The NVIDIA and AMD drivers honor these exports when
-// present; the code still works on systems with only one GPU.
+// application. The exports are ignored on systems with only one GPU.
 extern "C"
 {
 __declspec(dllexport) unsigned long NvOptimusEnablement = 0x00000001UL;
@@ -45,20 +40,21 @@ public:
 };
 #endif
 
-std::string resolveShaderPath(const char* executablePath)
+std::filesystem::path resolveShaderDirectory(const char* executablePath)
 {
     namespace fs = std::filesystem;
 
     const fs::path executable =
         executablePath != nullptr ? fs::path(executablePath) : fs::path();
     const fs::path executableDirectory = executable.parent_path();
-    const fs::path nextToExecutable = executableDirectory / "raytrace.comp";
-    if(fs::exists(nextToExecutable)) return nextToExecutable.string();
+    if(fs::exists(executableDirectory / "raytrace.hlsl"))
+        return executableDirectory;
 
-    const fs::path currentDirectoryShader = fs::path("shaders") / "raytrace.comp";
-    if(fs::exists(currentDirectoryShader)) return currentDirectoryShader.string();
+    const fs::path currentDirectory = fs::current_path() / "shaders";
+    if(fs::exists(currentDirectory / "raytrace.hlsl"))
+        return currentDirectory;
 
-    return nextToExecutable.string();
+    return executableDirectory;
 }
 
 template<typename Clock>
@@ -70,12 +66,13 @@ void paceUntil(typename Clock::time_point deadline)
         if(now >= deadline) return;
 
         const auto remaining = deadline - now;
-        if(remaining > std::chrono::milliseconds(2))
+        if(remaining > std::chrono::milliseconds(3))
         {
-            // Leave a small tail for a precise yield/spin. This avoids the
-            // several-millisecond oversleep that is common on Windows.
-            std::this_thread::sleep_for(
-                remaining - std::chrono::milliseconds(1));
+            // Short sleeps avoid crossing the next scheduler quantum on
+            // Windows, then the final few milliseconds are handled by yield.
+            // This keeps the 60 FPS cap from falling to an accidental 30 FPS
+            // cadence on systems with coarse sleep granularity.
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
         else
         {
@@ -90,28 +87,18 @@ int main(int argc, char** argv)
     try
     {
         const RenderSettings settings = loadRenderSettings();
-        Engine engine(settings);
-        std::unique_ptr<GpuRayTracer> gpuRayTracer;
-        if(settings.rayTracing)
-        {
-            gpuRayTracer = std::make_unique<GpuRayTracer>(
-                engine.colorTexture(),
-                engine.materialTexture(),
-                engine.RENDER_WIDTH,
-                engine.RENDER_HEIGHT,
-                settings.maxSteps,
-                settings.temporalSampleLimit,
-                resolveShaderPath(argc > 0 ? argv[0] : nullptr));
-        }
-        setupCameraCallbacks(engine.window);
+        D3D12Engine engine(settings, resolveShaderDirectory(
+            argc > 0 ? argv[0] : nullptr));
 
         std::cout << "Window: " << engine.WIDTH << " x " << engine.HEIGHT
                   << "\n";
+        std::cout << "Renderer: Direct3D 12\n";
         std::cout << "Ray tracing: " << (settings.rayTracing ? "on" : "off")
                   << "\n";
         std::cout << "VSync: " << (settings.vsync ? "on" : "off") << "\n";
-        std::cout << "Target FPS: " << (settings.targetFps == 0 ? "unlimited" :
-                                          std::to_string(settings.targetFps))
+        std::cout << "Target FPS: " << (settings.targetFps == 0
+                                             ? "unlimited"
+                                             : std::to_string(settings.targetFps))
                   << "\n";
 
         using Clock = std::chrono::steady_clock;
@@ -126,13 +113,13 @@ int main(int argc, char** argv)
                   std::chrono::duration<double>(1.0 / settings.targetFps))
             : Clock::duration::zero();
 
-        while(!glfwWindowShouldClose(engine.window))
+        while(!engine.shouldClose())
         {
-            const auto frameStart = Clock::now();
+            engine.processMessages();
+            if(engine.shouldClose()) break;
 
-            if(gpuRayTracer)
-                gpuRayTracer->render(engine.WIDTH, engine.HEIGHT);
-            engine.renderScene(SagA.r_s, !settings.rayTracing);
+            const auto frameStart = Clock::now();
+            engine.render(SagA.r_s, settings.rayTracing);
 
             if(frameBudget > Clock::duration::zero())
                 paceUntil<Clock>(frameStart + frameBudget);

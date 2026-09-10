@@ -1,12 +1,18 @@
 #ifndef BLACK_HOLE_SCENE_HPP
 #define BLACK_HOLE_SCENE_HPP
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
 #include <glm/glm.hpp>
 
 #include <cstdint>
 #include <vector>
-
-struct GLFWwindow;
 
 inline constexpr int DEFAULT_WINDOW_WIDTH = 800;
 inline constexpr int DEFAULT_WINDOW_HEIGHT = 600;
@@ -14,8 +20,8 @@ inline constexpr float DEFAULT_RENDER_SCALE = 0.32f;
 inline constexpr int DEFAULT_RENDER_WIDTH = 256;
 inline constexpr int DEFAULT_RENDER_HEIGHT = 192;
 inline constexpr std::uint32_t DEFAULT_MAX_STEPS = 6144;
-inline constexpr std::uint32_t DEFAULT_TEMPORAL_SAMPLE_LIMIT = 4;
-inline constexpr int DEFAULT_TARGET_FPS = 30;
+inline constexpr std::uint32_t DEFAULT_TEMPORAL_SAMPLE_LIMIT = 1;
+inline constexpr int DEFAULT_TARGET_FPS = 60;
 inline constexpr bool DEFAULT_RAYTRACING = true;
 // A larger integration step lets the reduced-step Windows preset traverse
 // the camera-to-disk distance without running thousands of empty iterations.
@@ -71,7 +77,7 @@ struct Camera
     Camera();
 
     void updateVectors();
-    void processMouse(GLFWwindow* window, double xpos, double ypos);
+    void processMouse(double xpos, double ypos);
 };
 
 struct BlackHole
@@ -101,6 +107,10 @@ extern Camera camera;
 extern BlackHole SagA;
 extern std::vector<Object> objects;
 
-void setupCameraCallbacks(GLFWwindow* window);
+bool handleCameraMessage(
+    HWND window,
+    UINT message,
+    WPARAM wParam,
+    LPARAM lParam);
 
 #endif

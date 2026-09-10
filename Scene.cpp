@@ -1,9 +1,9 @@
 #include "Scene.hpp"
 
-#include <GLFW/glfw3.h>
-
 #include <glm/common.hpp>
 #include <glm/geometric.hpp>
+
+#include <windowsx.h>
 
 #include <algorithm>
 #include <cmath>
@@ -177,10 +177,8 @@ void Camera::updateVectors()
     pos.z = target.z + radius * std::sin(elevation) * std::sin(azimuth);
 }
 
-void Camera::processMouse(GLFWwindow* window, double xpos, double ypos)
+void Camera::processMouse(double xpos, double ypos)
 {
-    (void)window;
-
     float dx = static_cast<float>(xpos - lastX);
     float dy = static_cast<float>(ypos - lastY);
 
@@ -234,41 +232,55 @@ std::vector<Object> objects =
     }
 };
 
-void setupCameraCallbacks(GLFWwindow* window)
+bool handleCameraMessage(
+    HWND window,
+    UINT message,
+    WPARAM wParam,
+    LPARAM lParam)
 {
-    glfwSetCursorPosCallback(window, [](GLFWwindow* callbackWindow, double xpos, double ypos)
+    switch(message)
     {
-        camera.processMouse(callbackWindow, xpos, ypos);
-    });
+    case WM_LBUTTONDOWN:
+        camera.dragging = true;
+        camera.panning = (wParam & MK_SHIFT) != 0;
+        camera.lastX = GET_X_LPARAM(lParam);
+        camera.lastY = GET_Y_LPARAM(lParam);
+        SetCapture(window);
+        return true;
 
-    glfwSetMouseButtonCallback(window, [](GLFWwindow* callbackWindow, int button, int action, int mods)
-    {
-        if(button != GLFW_MOUSE_BUTTON_LEFT) return;
-
-        if(action == GLFW_PRESS)
+    case WM_MOUSEMOVE:
+        if(camera.dragging)
         {
-            camera.dragging = true;
-            camera.panning = (mods & GLFW_MOD_SHIFT) != 0;
-            glfwGetCursorPos(callbackWindow, &camera.lastX, &camera.lastY);
+            camera.processMouse(
+                static_cast<double>(GET_X_LPARAM(lParam)),
+                static_cast<double>(GET_Y_LPARAM(lParam)));
+            return true;
         }
-        else if(action == GLFW_RELEASE)
-        {
-            camera.dragging = false;
-            camera.panning = false;
-        }
-    });
+        break;
 
-    glfwSetScrollCallback(window, [](GLFWwindow* callbackWindow, double xoffset, double yoffset)
+    case WM_LBUTTONUP:
+        camera.dragging = false;
+        camera.panning = false;
+        if(GetCapture() == window)
+            ReleaseCapture();
+        return true;
+
+    case WM_MOUSEWHEEL:
     {
-        (void)callbackWindow;
-        (void)xoffset;
-
-        if(yoffset > 0.0)
+        const short wheelDelta = GET_WHEEL_DELTA_WPARAM(wParam);
+        if(wheelDelta > 0)
             camera.radius /= camera.zoomSpeed;
-        else if(yoffset < 0.0)
+        else if(wheelDelta < 0)
             camera.radius *= camera.zoomSpeed;
 
         camera.radius = glm::clamp(camera.radius, camera.minRadius, camera.maxRadius);
         camera.updateVectors();
-    });
+        return true;
+    }
+
+    default:
+        break;
+    }
+
+    return false;
 }

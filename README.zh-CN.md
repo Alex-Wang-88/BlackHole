@@ -2,25 +2,24 @@
 
 [English](README.md) | **简体中文**
 
-这是一个可以在 Windows、Linux 以及其他支持 OpenGL 4.3 的系统上运行的实时黑洞可视化程序。光线追踪在 GPU 上通过 OpenGL Compute Shader 执行，并直接写入 OpenGL 合成阶段使用的纹理。
+这是一个面向 Windows、使用原生 Direct3D 12 渲染器的实时黑洞可视化程序。光线追踪在 GPU 上通过 HLSL Compute Shader 执行，并直接写入 D3D12 合成阶段使用的 UAV 纹理。
 
 ## 针对 Windows/GPU 的改动
 
-- 用 OpenGL 4.3 Compute Shader 替换了 macOS 专用的 Metal 和 Objective-C++ 路径。
+- 用原生 D3D12 Compute/Graphics 管线替换了 macOS 专用的 Metal 和 Objective-C++ 路径。
 - 测地线积分仍全部放在显卡上，并移除了“显卡 → CPU → 显卡”的每帧回读/上传。
-- 默认开启 GPU 光追，使用 `256×192` 工作分辨率、`6144` 步积分和 4 帧时间累积；在已测试的 RTX 5060 Laptop GPU 上更适合稳定 30 FPS。
+- 默认开启 GPU 光追，使用 `256×192` 工作分辨率、`6144` 步积分和 1 帧时间累积；在已测试的 RTX 5060 Laptop GPU 上以 60 FPS 为目标。若优先画质，仍可通过 `BLACKHOLE_TAA_SAMPLES` 调高累积帧数。
 - 光追也可以关闭，关闭后保留轻量的黑洞轮廓、吸积环和三维网格视图。
-- 默认目标帧率为 30 FPS。VSync 仍关闭，由程序自身稳定限帧。
+- 默认目标帧率为 60 FPS。VSync 仍关闭，由程序自身稳定限帧。
 - 为 NVIDIA Optimus 和 AMD PowerXpress 笔记本增加了优先选择独立显卡的导出标记。
 - 分辨率、积分步数、时间累积采样数和垂直同步均可通过环境变量调整。
 
 ## 环境要求
 
-- Windows 10/11、Linux 或其他支持 OpenGL 4.3 的系统
-- 能提供 OpenGL 4.3 Compute Shader 的显卡驱动
+- Windows 10/11，以及支持 Direct3D 12 的显卡驱动
 - Visual Studio 2022 C++ 工具，或其他 C++17 编译器
 - CMake 3.20 以上
-- Git（第一次配置时 CMake 会自动下载 GLFW 和 GLM）
+- Git（第一次配置时 CMake 会自动下载 GLM）
 
 ## Windows 快速运行
 
@@ -39,7 +38,7 @@ cmake --build build --config Release --parallel
 .\build\Release\BlackHole.exe
 ```
 
-构建后，程序会把 `raytrace.comp` 复制到 EXE 同目录，因此也可以直接进入 `Release` 文件夹双击运行。
+构建后，程序会把三个 HLSL Shader 复制到 EXE 同目录，因此也可以直接进入 `Release` 文件夹双击运行。
 
 ## 运行参数
 
@@ -52,8 +51,8 @@ cmake --build build --config Release --parallel
 | `BLACKHOLE_RENDER_WIDTH` / `BLACKHOLE_RENDER_HEIGHT` | 窗口大小乘比例 | 显式指定 GPU 渲染分辨率 |
 | `BLACKHOLE_RAYTRACE` | `1` | 设为 `0` 使用轻量光栅 fallback |
 | `BLACKHOLE_MAX_STEPS` | `6144` | 每条光线的最大测地线积分步数 |
-| `BLACKHOLE_TAA_SAMPLES` | `4` | 开启光追时的时间累积上限；`0` 表示不设上限 |
-| `BLACKHOLE_TARGET_FPS` | `30` | 目标帧率；`0` 表示不限帧 |
+| `BLACKHOLE_TAA_SAMPLES` | `1` | 开启光追时的时间累积上限；`0` 表示不设上限 |
+| `BLACKHOLE_TARGET_FPS` | `60` | 目标帧率；`0` 表示不限帧 |
 | `BLACKHOLE_VSYNC` | `0` | 设为 `1` 开启垂直同步 |
 
 例如使用 2560×1600 GPU 渲染并保持不限帧：
@@ -78,12 +77,12 @@ $env:BLACKHOLE_VSYNC = '0'
 ## 项目结构
 
 ```text
-BlackHole.cpp          跨平台入口和渲染循环
+BlackHole.cpp          Windows 入口和渲染循环
 Scene.hpp/.cpp         相机、黑洞、场景常量和运行参数
-Engine.hpp/.cpp        GLFW 窗口、OpenGL 合成和三维网格
-GpuRayTracer.hpp/.cpp  OpenGL Compute 调度和 GPU 缓冲区
-OpenGLLoader.*         基于 GLFW 的现代 OpenGL 函数加载器
-shaders/raytrace.comp  GPU 测地线光线追踪 Compute Shader
-CMakeLists.txt         跨平台 CMake 构建配置
+D3D12Engine.hpp/.cpp   Win32 窗口、D3D12 资源/管线和三维网格
+shaders/raytrace.hlsl  GPU 测地线光线追踪 Compute Shader
+shaders/scene.hlsl     透视网格 Shader
+shaders/composite.hlsl 全屏合成和光栅 fallback
+CMakeLists.txt         Windows D3D12 CMake 构建配置
 Draft/                 早期实验代码，不参与构建
 ```

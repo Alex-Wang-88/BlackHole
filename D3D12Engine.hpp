@@ -182,6 +182,7 @@ private:
     float currentJitterX = 0.0f;
     float currentJitterY = 0.0f;
     bool dlssActive = false;
+    bool lastFrameRayTracing = false;
 
 #ifdef BLACKHOLE_HAS_STREAMLINE
     struct StreamlineApi

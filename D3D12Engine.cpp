@@ -2771,10 +2771,30 @@ void D3D12Engine::render(double schwarzschildRadius, bool rayTracing)
     if(rayTracing && !sampleLimitReached)
         recordRaytrace(schwarzschildRadius, aspect);
     else
+    {
+        if(!rayTracing && lastFrameRayTracing)
+        {
+            // The native fallback compositor expects a transparent color
+            // texture. Clear the previous ray-traced frame exactly once when
+            // switching modes so it cannot leak into the fallback view.
+            transitionTexture(
+                outputTexture.Get(),
+                outputTextureState,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            const float clearColor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+            commandList->ClearUnorderedAccessViewFloat(
+                gpuDescriptor(COLOR_UAV_INDEX),
+                cpuDescriptor(COLOR_UAV_INDEX),
+                outputTexture.Get(),
+                clearColor,
+                0,
+                nullptr);
+        }
         transitionTexture(
             outputTexture.Get(),
-        outputTextureState,
-        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            outputTextureState,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    }
 
     const bool useDlss = rayTracing && recordDlss(cameraChanged);
     transitionTexture(
@@ -2788,6 +2808,7 @@ void D3D12Engine::render(double schwarzschildRadius, bool rayTracing)
         !rayTracing,
         useDlss);
     executeFrame();
+    lastFrameRayTracing = rayTracing;
 }
 
 void D3D12Engine::recordRaytrace(

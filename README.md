@@ -24,9 +24,12 @@ writes directly into UAV textures used by the D3D12 compositor.
   laptops.
 - Added a side-by-side image-quality panel in the same window. The left
   rendering area keeps its configured size while a 320px control sidebar is
-  added on the right, with live controls for ray tracing, render scale, ray
-  integration steps, DLSS mode, temporal samples, VSync, and reset-to-defaults.
-  Press `F1` to show or hide it.
+  added on the right. The sidebar uses dark cards, a live status summary,
+  larger hit targets, and explicit current values instead of the stock Win32
+  control styling. Sliders preview while dragging and apply GPU resource
+  changes on release. It provides live controls for ray tracing, render scale,
+  ray integration steps, DLSS mode, temporal samples, VSync, and
+  reset-to-defaults. Press `F1` to show or hide it.
 
 ## Requirements
 

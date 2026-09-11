@@ -2,6 +2,7 @@
 
 #include <d3dcompiler.h>
 #include <commctrl.h>
+#include <windowsx.h>
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -359,6 +360,7 @@ D3D12Engine::~D3D12Engine()
 
     if(instance != nullptr)
     {
+        UnregisterClassW(L"BlackHoleQualityPanel", instance);
         UnregisterClassW(L"BlackHoleD3D12RenderWindow", instance);
         UnregisterClassW(L"BlackHoleD3D12Window", instance);
     }
@@ -376,11 +378,9 @@ D3D12Engine::~D3D12Engine()
 
 void D3D12Engine::createQualityPanel()
 {
-    INITCOMMONCONTROLSEX commonControls{};
-    commonControls.dwSize = sizeof(commonControls);
-    commonControls.dwICC = ICC_BAR_CLASSES;
-    InitCommonControlsEx(&commonControls);
-
+    // Use one custom-drawn surface for the settings sidebar. The stock Win32
+    // button, combo-box, and trackbar controls are functional but visually
+    // dated and make the interaction targets too small for a live renderer.
     uiFont = CreateFontW(
         -14,
         0,
@@ -401,7 +401,7 @@ void D3D12Engine::createQualityPanel()
         0,
         0,
         0,
-        FW_BOLD,
+        FW_SEMIBOLD,
         FALSE,
         FALSE,
         FALSE,
@@ -411,13 +411,43 @@ void D3D12Engine::createQualityPanel()
         CLEARTYPE_QUALITY,
         DEFAULT_PITCH | FF_SWISS,
         L"Segoe UI");
-    qualityPanelBrush = CreateSolidBrush(RGB(15, 19, 27));
+    qualityPanelBrush = CreateSolidBrush(RGB(13, 18, 28));
+
+    WNDCLASSEXW panelClass{};
+    panelClass.cbSize = sizeof(panelClass);
+    panelClass.style = CS_HREDRAW | CS_VREDRAW;
+    panelClass.lpfnWndProc = &D3D12Engine::qualityPanelProc;
+    panelClass.hInstance = instance;
+    panelClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    panelClass.hbrBackground = nullptr;
+    panelClass.lpszClassName = L"BlackHoleQualityPanel";
+    if(RegisterClassExW(&panelClass) == 0 &&
+       GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
+    {
+        throw std::runtime_error("Register quality panel class failed");
+    }
 
     qualityPanel = CreateWindowExW(
-        WS_EX_CLIENTEDGE,
-        L"STATIC",
+        0,
+        panelClass.lpszClassName,
         L"",
-        WS_CHILD | WS_VISIBLE,
+        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
+        0,
+        0,
+        0,
+        0,
+        windowHandle,
+        nullptr,
+        instance,
+        this);
+    if(qualityPanel == nullptr)
+        throw std::runtime_error("Create quality panel failed");
+
+    fpsLabel = CreateWindowExW(
+        0,
+        L"STATIC",
+        L"FPS  --",
+        WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX,
         0,
         0,
         0,
@@ -426,46 +456,8 @@ void D3D12Engine::createQualityPanel()
         nullptr,
         instance,
         nullptr);
-
-    if(qualityPanel == nullptr)
-        throw std::runtime_error("Create quality panel failed");
-
-    auto makeControl = [this](
-                           LPCWSTR className,
-                           LPCWSTR text,
-                           DWORD style,
-                           int controlId)
-    {
-        HWND control = CreateWindowExW(
-            0,
-            className,
-            text,
-            style,
-            0,
-            0,
-            0,
-            0,
-            windowHandle,
-            reinterpret_cast<HMENU>(static_cast<INT_PTR>(controlId)),
-            instance,
-            nullptr);
-        if(control == nullptr)
-            throw std::runtime_error("Create quality control failed");
-        if(uiFont != nullptr)
-            SendMessageW(
-                control,
-                WM_SETFONT,
-                reinterpret_cast<WPARAM>(uiFont),
-                TRUE);
-        qualityControls.push_back(control);
-        return control;
-    };
-
-    fpsLabel = makeControl(
-        L"STATIC",
-        L"FPS  --",
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
-        0);
+    if(fpsLabel == nullptr)
+        throw std::runtime_error("Create FPS label failed");
     if(uiHeadingFont != nullptr)
         SendMessageW(
             fpsLabel,
@@ -473,179 +465,659 @@ void D3D12Engine::createQualityPanel()
             reinterpret_cast<WPARAM>(uiHeadingFont),
             TRUE);
 
-    qualityHeader = makeControl(
-        L"STATIC",
-        L"IMAGE QUALITY",
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
-        0);
-    if(uiHeadingFont != nullptr)
-        SendMessageW(
-            qualityHeader,
-            WM_SETFONT,
-            reinterpret_cast<WPARAM>(uiHeadingFont),
-            TRUE);
-    qualityHint = makeControl(
-        L"STATIC",
-        L"Live controls - changes apply immediately",
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
-        0);
-
-    renderGroup = makeControl(
-        L"BUTTON",
-        L"Ray tracing / internal resolution",
-        WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
-        0);
-    rayTracingCheck = makeControl(
-        L"BUTTON",
-        L"Ray tracing (full black-hole effect)",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
-        IDC_QUALITY_RAYTRACE);
-    renderScaleLabel = makeControl(
-        L"STATIC",
-        L"Render scale",
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
-        0);
-    renderScaleTrack = makeControl(
-        TRACKBAR_CLASSW,
-        L"",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | TBS_AUTOTICKS | TBS_HORZ,
-        IDC_QUALITY_SCALE);
-    renderScaleValue = makeControl(
-        L"STATIC",
-        L"",
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
-        0);
-    rayStepsLabel = makeControl(
-        L"STATIC",
-        L"Ray integration steps",
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
-        0);
-    rayStepsTrack = makeControl(
-        TRACKBAR_CLASSW,
-        L"",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | TBS_AUTOTICKS | TBS_HORZ,
-        IDC_QUALITY_STEPS);
-    rayStepsValue = makeControl(
-        L"STATIC",
-        L"",
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
-        0);
-
-    upscaleGroup = makeControl(
-        L"BUTTON",
-        L"Super resolution",
-        WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
-        0);
-    dlssCheck = makeControl(
-        L"BUTTON",
-        L"NVIDIA DLSS Super Resolution",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
-        IDC_QUALITY_DLSS);
-    dlssModeLabel = makeControl(
-        L"STATIC",
-        L"DLSS mode",
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
-        0);
-    dlssModeCombo = makeControl(
-        L"COMBOBOX",
-        L"",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP |
-            CBS_DROPDOWNLIST | CBS_NOINTEGRALHEIGHT | WS_VSCROLL,
-        IDC_QUALITY_DLSS_MODE);
-    SendMessageW(
-        dlssModeCombo,
-        CB_ADDSTRING,
-        0,
-        reinterpret_cast<LPARAM>(L"Quality (highest)"));
-    SendMessageW(
-        dlssModeCombo,
-        CB_ADDSTRING,
-        0,
-        reinterpret_cast<LPARAM>(L"Balanced"));
-    SendMessageW(
-        dlssModeCombo,
-        CB_ADDSTRING,
-        0,
-        reinterpret_cast<LPARAM>(L"Performance"));
-    SendMessageW(
-        dlssModeCombo,
-        CB_ADDSTRING,
-        0,
-        reinterpret_cast<LPARAM>(L"Ultra Performance"));
-    dlssStatus = makeControl(
-        L"STATIC",
-        L"DLSS status: checking runtime...",
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
-        0);
-
-    accumulationGroup = makeControl(
-        L"BUTTON",
-        L"Temporal reconstruction",
-        WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
-        0);
-    taaLabel = makeControl(
-        L"STATIC",
-        L"Ray accumulation samples",
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
-        0);
-    taaCombo = makeControl(
-        L"COMBOBOX",
-        L"",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP |
-            CBS_DROPDOWNLIST | CBS_NOINTEGRALHEIGHT | WS_VSCROLL,
-        IDC_QUALITY_TAA);
-    const wchar_t* taaOptions[] =
-    {
-        L"1 sample (fast)",
-        L"2 samples",
-        L"4 samples",
-        L"8 samples",
-        L"16 samples",
-        L"Unlimited"
-    };
-    for(const wchar_t* option : taaOptions)
-        SendMessageW(
-            taaCombo,
-            CB_ADDSTRING,
-            0,
-            reinterpret_cast<LPARAM>(option));
-    vsyncCheck = makeControl(
-        L"BUTTON",
-        L"VSync (display-paced)",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
-        IDC_QUALITY_VSYNC);
-
-    statusLabel = makeControl(
-        L"STATIC",
-        L"",
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
-        0);
-    outputLabel = makeControl(
-        L"STATIC",
-        L"",
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
-        0);
-    resetButton = makeControl(
-        L"BUTTON",
-        L"Reset quality defaults",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-        IDC_QUALITY_RESET);
-
-    SendMessageW(
-        renderScaleTrack,
-        TBM_SETRANGE,
-        TRUE,
-        MAKELONG(25, 100));
-    SendMessageW(renderScaleTrack, TBM_SETTICFREQ, 5, 0);
-    SendMessageW(
-        rayStepsTrack,
-        TBM_SETRANGE,
-        TRUE,
-        MAKELONG(512, 16384));
-    SendMessageW(rayStepsTrack, TBM_SETTICFREQ, 2048, 0);
-
     layoutQualityPanel();
     updateQualityPanel();
+    return;
+
+}
+
+void D3D12Engine::paintQualityPanel(HDC dc)
+{
+    RECT clientRect{};
+    GetClientRect(qualityPanel, &clientRect);
+    const int panelWidth = std::max<int>(clientRect.right, 1);
+    const int panelHeight = std::max<int>(clientRect.bottom, 1);
+    const int left = 16;
+    const int right = std::max(panelWidth - 16, left + 1);
+
+    const COLORREF background = RGB(13, 18, 28);
+    const COLORREF card = RGB(23, 30, 43);
+    const COLORREF cardBorder = RGB(42, 53, 71);
+    const COLORREF text = RGB(235, 241, 250);
+    const COLORREF muted = RGB(149, 163, 183);
+    const COLORREF faint = RGB(103, 119, 143);
+    const COLORREF accent = RGB(88, 166, 255);
+    const COLORREF accentSoft = RGB(34, 75, 122);
+    const COLORREF disabled = RGB(86, 99, 119);
+
+    auto fill = [&](const RECT& rect, COLORREF color)
+    {
+        HBRUSH brush = CreateSolidBrush(color);
+        FillRect(dc, &rect, brush);
+        DeleteObject(brush);
+    };
+
+    auto roundRect = [&](const RECT& rect, COLORREF color, COLORREF border)
+    {
+        HBRUSH brush = CreateSolidBrush(color);
+        HPEN pen = CreatePen(PS_SOLID, 1, border);
+        HGDIOBJ oldBrush = SelectObject(dc, brush);
+        HGDIOBJ oldPen = SelectObject(dc, pen);
+        RoundRect(
+            dc,
+            rect.left,
+            rect.top,
+            rect.right,
+            rect.bottom,
+            10,
+            10);
+        SelectObject(dc, oldPen);
+        SelectObject(dc, oldBrush);
+        DeleteObject(pen);
+        DeleteObject(brush);
+    };
+
+    auto drawText = [&, this](
+                         const std::wstring& value,
+                         int x,
+                         int y,
+                         int width,
+                         int height,
+                         COLORREF color,
+                         HFONT font,
+                         UINT format = DT_SINGLELINE | DT_VCENTER |
+                                       DT_NOPREFIX | DT_END_ELLIPSIS)
+    {
+        RECT rect{x, y, x + width, y + height};
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, color);
+        HGDIOBJ oldFont = nullptr;
+        if(font != nullptr)
+            oldFont = SelectObject(dc, font);
+        DrawTextW(dc, value.c_str(), -1, &rect, format);
+        if(oldFont != nullptr)
+            SelectObject(dc, oldFont);
+    };
+
+    auto drawCard = [&](int top, int height)
+    {
+        roundRect(RECT{left, top, right, top + height}, card, cardBorder);
+    };
+
+    auto drawToggle = [&](int y, bool enabled, bool available = true)
+    {
+        const COLORREF track = !available
+                                  ? RGB(42, 49, 63)
+                                  : (enabled ? accent : RGB(55, 66, 84));
+        const COLORREF knob = available ? RGB(247, 250, 255) : disabled;
+        const RECT trackRect{right - 52, y, right - 16, y + 22};
+        roundRect(trackRect, track, track);
+        const int knobX = enabled ? right - 27 : right - 41;
+        HBRUSH knobBrush = CreateSolidBrush(knob);
+        HPEN knobPen = CreatePen(PS_SOLID, 1, knob);
+        HGDIOBJ oldBrush = SelectObject(dc, knobBrush);
+        HGDIOBJ oldPen = SelectObject(dc, knobPen);
+        Ellipse(dc, knobX - 7, y + 4, knobX + 7, y + 18);
+        SelectObject(dc, oldPen);
+        SelectObject(dc, oldBrush);
+        DeleteObject(knobPen);
+        DeleteObject(knobBrush);
+    };
+
+    auto drawSlider = [&](int y, float position, bool available = true)
+    {
+        const int trackLeft = left + 12;
+        const int trackRight = right - 12;
+        const int trackWidth = std::max(trackRight - trackLeft, 8);
+        const int knobX = trackLeft + static_cast<int>(std::lround(
+            std::clamp(position, 0.0f, 1.0f) * trackWidth));
+        const COLORREF trackColor = available ? RGB(58, 71, 94) : RGB(44, 52, 67);
+        const COLORREF fillColor = available ? accent : disabled;
+        roundRect(
+            RECT{trackLeft, y, trackRight, y + 6},
+            trackColor,
+            trackColor);
+        if(knobX > trackLeft)
+        {
+            roundRect(
+                RECT{trackLeft, y, knobX, y + 6},
+                fillColor,
+                fillColor);
+        }
+        HBRUSH knobBrush = CreateSolidBrush(fillColor);
+        HPEN knobPen = CreatePen(PS_SOLID, 2, background);
+        HGDIOBJ oldBrush = SelectObject(dc, knobBrush);
+        HGDIOBJ oldPen = SelectObject(dc, knobPen);
+        Ellipse(dc, knobX - 7, y - 4, knobX + 7, y + 10);
+        SelectObject(dc, oldPen);
+        SelectObject(dc, oldBrush);
+        DeleteObject(knobPen);
+        DeleteObject(knobBrush);
+    };
+
+    auto drawChip = [&](const RECT& rect, const wchar_t* label, bool selected, bool available)
+    {
+        const COLORREF chipColor = !available
+                                     ? RGB(30, 37, 50)
+                                     : (selected ? accentSoft : RGB(31, 40, 55));
+        const COLORREF border = !available
+                                  ? RGB(43, 51, 66)
+                                  : (selected ? accent : RGB(48, 61, 82));
+        roundRect(rect, chipColor, border);
+        drawText(
+            label,
+            rect.left + 4,
+            rect.top,
+            std::max<int>(
+                static_cast<int>(rect.right - rect.left) - 8,
+                1),
+            rect.bottom - rect.top,
+            !available ? disabled : (selected ? text : muted),
+            uiFont,
+            DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX |
+                DT_END_ELLIPSIS);
+    };
+
+    fill(RECT{0, 0, panelWidth, panelHeight}, background);
+    fill(RECT{0, 0, panelWidth, 3}, accent);
+
+    drawText(L"IMAGE QUALITY", left, 12, right - left, 24, text, uiHeadingFont);
+    drawText(
+        L"Live tuning  |  changes apply instantly",
+        left,
+        36,
+        right - left,
+        18,
+        muted,
+        uiFont);
+
+    drawCard(60, 52);
+    drawText(L"LIVE PREVIEW", left + 12, 69, 110, 14, faint, uiFont);
+    const bool useDlss = settings.dlss && dlssActive;
+    const wchar_t* modeNames[] =
+    {
+        L"Quality",
+        L"Balanced",
+        L"Performance",
+        L"Ultra performance"
+    };
+    std::wostringstream previewText;
+    previewText << (useDlss ? L"DLSS  |  " : L"Native  |  ")
+                << modeNames[static_cast<int>(settings.dlssMode)]
+                << L"  |  " << WIDTH << L" x " << HEIGHT;
+    drawText(
+        previewText.str(),
+        left + 12,
+        85,
+        right - left - 112,
+        18,
+        text,
+        uiFont);
+    std::wostringstream fpsText;
+    fpsText << std::fixed << std::setprecision(1)
+            << (currentFps > 0.0 ? currentFps : 0.0);
+    drawText(L"FPS", right - 76, 68, 58, 13, faint, uiFont, DT_RIGHT | DT_NOPREFIX);
+    drawText(
+        currentFps > 0.0 ? fpsText.str() : L"--",
+        right - 76,
+        82,
+        58,
+        18,
+        accent,
+        uiHeadingFont,
+        DT_RIGHT | DT_NOPREFIX);
+
+    drawCard(122, 70);
+    drawText(L"RAY TRACING", left + 12, 134, 180, 17, text, uiHeadingFont);
+    drawText(
+        settings.rayTracing
+            ? L"Full lensing and accretion disk"
+            : L"Fast silhouette and grid preview",
+        left + 12,
+        153,
+        right - left - 78,
+        16,
+        muted,
+        uiFont);
+    drawText(
+        settings.rayTracing ? L"ON" : L"OFF",
+        right - 100,
+        137,
+        40,
+        22,
+        settings.rayTracing ? accent : muted,
+        uiFont,
+        DT_RIGHT | DT_NOPREFIX);
+    drawToggle(137, settings.rayTracing);
+
+    drawCard(202, 136);
+    drawText(L"INTERNAL RESOLUTION", left + 12, 214, 170, 17, text, uiHeadingFont);
+    const int scalePercent = qualityPanelPreviewScale >= 0
+                                 ? qualityPanelPreviewScale
+                                 : std::clamp(
+                                       static_cast<int>(std::lround(
+                                           100.0 * static_cast<double>(RENDER_WIDTH) /
+                                           static_cast<double>(std::max(WIDTH, 1)))),
+                                       25,
+                                       100);
+    const int previewWidth = static_cast<int>(std::lround(
+        static_cast<float>(WIDTH) * scalePercent / 100.0f));
+    const int previewHeight = static_cast<int>(std::lround(
+        static_cast<float>(HEIGHT) * scalePercent / 100.0f));
+    std::wostringstream scaleText;
+    scaleText << scalePercent << L"%  |  " << previewWidth << L" x "
+              << previewHeight;
+    drawText(
+        scaleText.str(),
+        right - 150,
+        214,
+        138,
+        17,
+        accent,
+        uiFont,
+        DT_RIGHT | DT_NOPREFIX);
+    drawText(
+        L"Lower values reduce GPU cost",
+        left + 12,
+        234,
+        right - left - 24,
+        15,
+        muted,
+        uiFont);
+    drawSlider(
+        258,
+        static_cast<float>(scalePercent - 25) / 75.0f);
+    drawText(L"25%", left + 12, 270, 44, 15, faint, uiFont);
+    drawText(L"100%", right - 50, 270, 38, 15, faint, uiFont, DT_RIGHT | DT_NOPREFIX);
+
+    const int steps = qualityPanelPreviewSteps >= 0
+                          ? qualityPanelPreviewSteps
+                          : static_cast<int>(settings.maxSteps);
+    const float stepsPosition = static_cast<float>(steps - 512) /
+                                static_cast<float>(16384 - 512);
+    drawText(L"RAY STEPS", left + 12, 290, 120, 16, text, uiFont);
+    std::wstring stepsText = std::to_wstring(steps) + L" steps";
+    drawText(
+        stepsText,
+        right - 110,
+        290,
+        98,
+        16,
+        accent,
+        uiFont,
+        DT_RIGHT | DT_NOPREFIX);
+    drawSlider(316, stepsPosition);
+    drawText(L"512", left + 12, 324, 42, 13, faint, uiFont);
+    drawText(L"16K", right - 42, 324, 30, 13, faint, uiFont, DT_RIGHT | DT_NOPREFIX);
+
+    drawCard(348, 136);
+    drawText(L"SUPER RESOLUTION", left + 12, 360, 180, 17, text, uiHeadingFont);
+    drawText(
+        useDlss
+            ? L"NVIDIA DLSS is active"
+            : (settings.dlss ? L"DLSS runtime unavailable" : L"Use the native compositor"),
+        left + 12,
+        380,
+        right - left - 78,
+        15,
+        useDlss ? accent : (settings.dlss ? RGB(255, 191, 92) : muted),
+        uiFont);
+    drawText(
+        !dlssActive ? L"OFF" : (settings.dlss ? L"ON" : L"OFF"),
+        right - 100,
+        363,
+        40,
+        22,
+        !dlssActive ? disabled : (settings.dlss ? accent : muted),
+        uiFont,
+        DT_RIGHT | DT_NOPREFIX);
+    drawToggle(363, settings.dlss, dlssActive);
+    const int chipLeft = left + 12;
+    const int chipRight = right - 12;
+    const int chipMid = (chipLeft + chipRight) / 2;
+    drawChip(
+        RECT{chipLeft, 411, chipMid - 4, 435},
+        L"Quality",
+        settings.dlssMode == DlssQualityMode::Quality,
+        dlssActive);
+    drawChip(
+        RECT{chipMid + 4, 411, chipRight, 435},
+        L"Balanced",
+        settings.dlssMode == DlssQualityMode::Balanced,
+        dlssActive);
+    drawChip(
+        RECT{chipLeft, 443, chipMid - 4, 467},
+        L"Performance",
+        settings.dlssMode == DlssQualityMode::Performance,
+        dlssActive);
+    drawChip(
+        RECT{chipMid + 4, 443, chipRight, 467},
+        L"Ultra performance",
+        settings.dlssMode == DlssQualityMode::UltraPerformance,
+        dlssActive);
+
+    drawCard(494, 72);
+    drawText(L"TEMPORAL RECONSTRUCTION", left + 12, 503, 210, 16, text, uiHeadingFont);
+    std::wstring taaText;
+    switch(settings.temporalSampleLimit)
+    {
+    case 0:
+        taaText = L"Unlimited accumulation";
+        break;
+    case 1:
+        taaText = L"1 sample  |  fastest";
+        break;
+    default:
+        taaText = std::to_wstring(settings.temporalSampleLimit) + L" samples";
+        break;
+    }
+    const RECT taaRect{left + 12, 520, right - 68, 544};
+    roundRect(taaRect, RGB(31, 40, 55), RGB(48, 61, 82));
+    drawText(taaText, taaRect.left + 10, taaRect.top, taaRect.right - taaRect.left - 26, 24, text, uiFont);
+    drawText(L"v", taaRect.right - 18, taaRect.top, 12, 24, muted, uiFont, DT_CENTER | DT_NOPREFIX);
+    drawText(L"VSync", left + 12, 546, 76, 18, text, uiFont);
+    drawText(
+        settings.vsync ? L"Display paced" : L"Unlimited presentation",
+        left + 72,
+        546,
+        134,
+        18,
+        muted,
+        uiFont);
+    drawToggle(543, settings.vsync);
+
+    const RECT resetRect{left, 574, right, 598};
+    roundRect(resetRect, RGB(31, 40, 55), RGB(55, 70, 93));
+    drawText(
+        L"Reset to recommended",
+        resetRect.left,
+        resetRect.top,
+        resetRect.right - resetRect.left,
+        resetRect.bottom - resetRect.top,
+        text,
+        uiFont,
+        DT_CENTER | DT_NOPREFIX);
+
+    if(qualityTaaMenuOpen)
+    {
+        const RECT menuShadow{left + 3, 374, right - 9, 520};
+        const RECT menu{left + 1, 372, right - 11, 518};
+        roundRect(menuShadow, RGB(5, 8, 13), RGB(5, 8, 13));
+        roundRect(menu, RGB(26, 34, 48), RGB(84, 112, 150));
+        const wchar_t* options[] =
+        {
+            L"1 sample  |  fastest",
+            L"2 samples",
+            L"4 samples",
+            L"8 samples",
+            L"16 samples",
+            L"Unlimited accumulation"
+        };
+        const std::uint32_t values[] = {1, 2, 4, 8, 16, 0};
+        for(int index = 0; index < 6; ++index)
+        {
+            const bool selected = values[index] == settings.temporalSampleLimit;
+            if(selected)
+            {
+                const RECT selectedRect{
+                    menu.left + 5,
+                    menu.top + 4 + index * 24,
+                    menu.right - 5,
+                    menu.top + 4 + index * 24 + 22};
+                roundRect(selectedRect, accentSoft, accentSoft);
+            }
+            drawText(
+                options[index],
+                menu.left + 13,
+                menu.top + 4 + index * 24,
+                menu.right - menu.left - 26,
+                22,
+                selected ? text : muted,
+                uiFont);
+        }
+    }
+}
+
+LRESULT D3D12Engine::handleQualityPanelMessage(
+    UINT message,
+    WPARAM wParam,
+    LPARAM lParam)
+{
+    const int panelWidth = [&]
+    {
+        RECT rect{};
+        GetClientRect(qualityPanel, &rect);
+        return std::max<int>(rect.right, QUALITY_PANEL_WIDTH);
+    }();
+    const int left = 16;
+    const int right = panelWidth - 16;
+    const int trackLeft = left + 12;
+    const int trackRight = right - 12;
+    const auto pointFromMessage = [&]
+    {
+        return POINT{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+    };
+    const auto hit = [](const POINT& point, const RECT& rect)
+    {
+        return PtInRect(&rect, point) != FALSE;
+    };
+    const auto valueAt = [&](int x, int minimum, int maximum)
+    {
+        const float amount = std::clamp(
+            static_cast<float>(x - trackLeft) /
+                static_cast<float>(std::max(trackRight - trackLeft, 1)),
+            0.0f,
+            1.0f);
+        return static_cast<int>(std::lround(
+            static_cast<float>(minimum) +
+            amount * static_cast<float>(maximum - minimum)));
+    };
+    const auto taaMenuRect = [&]
+    {
+        return RECT{left + 1, 372, right - 11, 518};
+    };
+
+    switch(message)
+    {
+    case WM_PAINT:
+    {
+        PAINTSTRUCT paint{};
+        HDC dc = BeginPaint(qualityPanel, &paint);
+        paintQualityPanel(dc);
+        EndPaint(qualityPanel, &paint);
+        return 0;
+    }
+
+    case WM_ERASEBKGND:
+        return 1;
+
+    case WM_LBUTTONDOWN:
+    {
+        const POINT point = pointFromMessage();
+        if(qualityTaaMenuOpen)
+        {
+            const RECT menu = taaMenuRect();
+            if(hit(point, menu))
+            {
+                const int selection = std::clamp(
+                    (static_cast<int>(point.y) - static_cast<int>(menu.top) - 4) /
+                        24,
+                    0,
+                    5);
+                applyTemporalSamples(selection);
+                qualityTaaMenuOpen = false;
+                InvalidateRect(qualityPanel, nullptr, FALSE);
+                return 0;
+            }
+            qualityTaaMenuOpen = false;
+            InvalidateRect(qualityPanel, nullptr, FALSE);
+            return 0;
+        }
+
+        if(hit(point, RECT{left, 126, right, 168}))
+        {
+            settings.rayTracing = !settings.rayTracing;
+            resetAccumulation();
+            updateQualityPanel();
+            return 0;
+        }
+        if(hit(point, RECT{trackLeft - 10, 248, trackRight + 10, 279}))
+        {
+            qualityPanelDragTarget = 1;
+            qualityPanelPreviewScale = valueAt(point.x, 25, 100);
+            SetCapture(qualityPanel);
+            InvalidateRect(qualityPanel, nullptr, FALSE);
+            return 0;
+        }
+        if(hit(point, RECT{trackLeft - 10, 305, trackRight + 10, 337}))
+        {
+            qualityPanelDragTarget = 2;
+            qualityPanelPreviewSteps = valueAt(point.x, 512, 16384);
+            SetCapture(qualityPanel);
+            InvalidateRect(qualityPanel, nullptr, FALSE);
+            return 0;
+        }
+        if(hit(point, RECT{left, 352, right, 398}))
+        {
+            if(dlssActive)
+            {
+                settings.dlss = !settings.dlss;
+                resetAccumulation();
+                updateQualityPanel();
+            }
+            return 0;
+        }
+
+        const int chipLeft = left + 12;
+        const int chipRight = right - 12;
+        const int chipMid = (chipLeft + chipRight) / 2;
+        if(dlssActive && hit(point, RECT{chipLeft, 406, chipMid, 440}))
+        {
+            applyDlssMode(static_cast<int>(DlssQualityMode::Quality));
+            return 0;
+        }
+        if(dlssActive && hit(point, RECT{chipMid, 406, chipRight, 440}))
+        {
+            applyDlssMode(static_cast<int>(DlssQualityMode::Balanced));
+            return 0;
+        }
+        if(dlssActive && hit(point, RECT{chipLeft, 438, chipMid, 472}))
+        {
+            applyDlssMode(static_cast<int>(DlssQualityMode::Performance));
+            return 0;
+        }
+        if(dlssActive && hit(point, RECT{chipMid, 438, chipRight, 472}))
+        {
+            applyDlssMode(static_cast<int>(DlssQualityMode::UltraPerformance));
+            return 0;
+        }
+        if(hit(point, RECT{left + 8, 516, right - 64, 548}))
+        {
+            qualityTaaMenuOpen = true;
+            InvalidateRect(qualityPanel, nullptr, FALSE);
+            return 0;
+        }
+        if(hit(point, RECT{right - 60, 538, right, 568}))
+        {
+            settings.vsync = !settings.vsync;
+            updateQualityPanel();
+            return 0;
+        }
+        if(hit(point, RECT{left, 570, right, 600}))
+        {
+            resetQualityDefaults();
+            return 0;
+        }
+        return 0;
+    }
+
+    case WM_MOUSEMOVE:
+        if(qualityPanelDragTarget == 1)
+        {
+            qualityPanelPreviewScale = valueAt(
+                GET_X_LPARAM(lParam),
+                25,
+                100);
+            InvalidateRect(qualityPanel, nullptr, FALSE);
+        }
+        else if(qualityPanelDragTarget == 2)
+        {
+            qualityPanelPreviewSteps = valueAt(
+                GET_X_LPARAM(lParam),
+                512,
+                16384);
+            InvalidateRect(qualityPanel, nullptr, FALSE);
+        }
+        return 0;
+
+    case WM_LBUTTONUP:
+        if(qualityPanelDragTarget == 1)
+        {
+            if(qualityPanelPreviewScale >= 0)
+                applyRenderScale(qualityPanelPreviewScale);
+            qualityPanelDragTarget = 0;
+            qualityPanelPreviewScale = -1;
+            if(GetCapture() == qualityPanel)
+                ReleaseCapture();
+            InvalidateRect(qualityPanel, nullptr, FALSE);
+            return 0;
+        }
+        if(qualityPanelDragTarget == 2)
+        {
+            if(qualityPanelPreviewSteps >= 0)
+                applyRaySteps(qualityPanelPreviewSteps);
+            qualityPanelDragTarget = 0;
+            qualityPanelPreviewSteps = -1;
+            if(GetCapture() == qualityPanel)
+                ReleaseCapture();
+            InvalidateRect(qualityPanel, nullptr, FALSE);
+            return 0;
+        }
+        return 0;
+
+    case WM_CAPTURECHANGED:
+    case WM_CANCELMODE:
+        qualityPanelDragTarget = 0;
+        qualityPanelPreviewScale = -1;
+        qualityPanelPreviewSteps = -1;
+        InvalidateRect(qualityPanel, nullptr, FALSE);
+        return 0;
+
+    case WM_SETCURSOR:
+        SetCursor(LoadCursorW(nullptr, IDC_ARROW));
+        return TRUE;
+
+    default:
+        break;
+    }
+
+    (void)wParam;
+    return DefWindowProcW(qualityPanel, message, wParam, lParam);
+}
+
+LRESULT CALLBACK D3D12Engine::qualityPanelProc(
+    HWND window,
+    UINT message,
+    WPARAM wParam,
+    LPARAM lParam)
+{
+    if(message == WM_NCCREATE)
+    {
+        const CREATESTRUCTW* create = reinterpret_cast<const CREATESTRUCTW*>(lParam);
+        auto* engine = static_cast<D3D12Engine*>(create->lpCreateParams);
+        SetWindowLongPtrW(
+            window,
+            GWLP_USERDATA,
+            reinterpret_cast<LONG_PTR>(engine));
+        return TRUE;
+    }
+
+    auto* engine = reinterpret_cast<D3D12Engine*>(GetWindowLongPtrW(
+        window,
+        GWLP_USERDATA));
+    if(engine != nullptr && engine->qualityPanel == window)
+        return engine->handleQualityPanelMessage(message, wParam, lParam);
+    return DefWindowProcW(window, message, wParam, lParam);
 }
 
 void D3D12Engine::layoutQualityPanel()
@@ -661,51 +1133,25 @@ void D3D12Engine::layoutQualityPanel()
         QUALITY_PANEL_WIDTH,
         std::max(clientWidth - WIDTH, 0));
     const int panelX = std::min(WIDTH, clientWidth);
-    const int left = panelX + 16;
-    const int contentWidth = std::max(panelWidth - 32, 120);
-    const int valueWidth = 72;
-    const int trackWidth = std::max(contentWidth - valueWidth - 8, 80);
 
     if(renderWindowHandle != nullptr)
         MoveWindow(renderWindowHandle, 0, 0, WIDTH, HEIGHT, TRUE);
-    MoveWindow(qualityPanel, panelX, 0, panelWidth, clientHeight, TRUE);
-    MoveWindow(fpsLabel, 12, 10, 180, 28, TRUE);
-    MoveWindow(qualityHeader, left, 12, contentWidth, 24, TRUE);
-    MoveWindow(qualityHint, left, 36, contentWidth, 20, TRUE);
-
-    MoveWindow(renderGroup, left, 62, contentWidth, 178, TRUE);
-    MoveWindow(rayTracingCheck, left + 12, 84, contentWidth - 24, 22, TRUE);
-    MoveWindow(renderScaleLabel, left + 12, 113, contentWidth - 24, 18, TRUE);
-    MoveWindow(renderScaleTrack, left + 12, 132, trackWidth, 28, TRUE);
-    MoveWindow(renderScaleValue, left + 12 + trackWidth + 8, 136, valueWidth, 22, TRUE);
-    MoveWindow(rayStepsLabel, left + 12, 166, contentWidth - 24, 18, TRUE);
-    MoveWindow(rayStepsTrack, left + 12, 185, trackWidth, 28, TRUE);
-    MoveWindow(rayStepsValue, left + 12 + trackWidth + 8, 189, valueWidth, 22, TRUE);
-
-    MoveWindow(upscaleGroup, left, 248, contentWidth, 118, TRUE);
-    MoveWindow(dlssCheck, left + 12, 270, contentWidth - 24, 22, TRUE);
-    MoveWindow(dlssModeLabel, left + 12, 298, 80, 18, TRUE);
-    MoveWindow(dlssModeCombo, left + 94, 294, contentWidth - 106, 24, TRUE);
-    MoveWindow(dlssStatus, left + 12, 329, contentWidth - 24, 28, TRUE);
-
-    MoveWindow(accumulationGroup, left, 374, contentWidth, 103, TRUE);
-    MoveWindow(taaLabel, left + 12, 396, 145, 18, TRUE);
-    MoveWindow(taaCombo, left + 160, 392, contentWidth - 172, 24, TRUE);
-    MoveWindow(vsyncCheck, left + 12, 431, contentWidth - 24, 22, TRUE);
-
-    MoveWindow(statusLabel, left, 486, contentWidth, 20, TRUE);
-    MoveWindow(outputLabel, left, 508, contentWidth, 20, TRUE);
-    MoveWindow(resetButton, left, clientHeight - 42, contentWidth, 28, TRUE);
+    if(qualityPanel != nullptr)
+        MoveWindow(qualityPanel, panelX, 0, panelWidth, clientHeight, TRUE);
+    if(fpsLabel != nullptr)
+        MoveWindow(fpsLabel, 12, 10, 180, 28, TRUE);
 }
 
 void D3D12Engine::updateQualityFps(double fps)
 {
-    if(fpsLabel == nullptr)
-        return;
+    currentFps = fps;
 
     std::wostringstream text;
     text << L"FPS  " << std::fixed << std::setprecision(1) << fps;
-    SetWindowTextW(fpsLabel, text.str().c_str());
+    if(fpsLabel != nullptr)
+        SetWindowTextW(fpsLabel, text.str().c_str());
+    if(qualityPanel != nullptr)
+        InvalidateRect(qualityPanel, nullptr, FALSE);
 }
 
 void D3D12Engine::updateFps(double fps)
@@ -718,104 +1164,14 @@ void D3D12Engine::updateQualityPanel()
     if(qualityPanel == nullptr)
         return;
 
-    SendMessageW(
-        rayTracingCheck,
-        BM_SETCHECK,
-        settings.rayTracing ? BST_CHECKED : BST_UNCHECKED,
-        0);
-    SendMessageW(
-        dlssCheck,
-        BM_SETCHECK,
-        settings.dlss ? BST_CHECKED : BST_UNCHECKED,
-        0);
-    SendMessageW(
-        vsyncCheck,
-        BM_SETCHECK,
-        settings.vsync ? BST_CHECKED : BST_UNCHECKED,
-        0);
-
-    const int scalePercent = std::clamp(
-        static_cast<int>(std::lround(
-            100.0 * static_cast<double>(RENDER_WIDTH) /
-            static_cast<double>(std::max(WIDTH, 1)))),
-        25,
-        100);
-    SendMessageW(renderScaleTrack, TBM_SETPOS, TRUE, scalePercent);
-    SendMessageW(
-        rayStepsTrack,
-        TBM_SETPOS,
-        TRUE,
-        std::clamp<int>(settings.maxSteps, 512, 16384));
-    SendMessageW(
-        dlssModeCombo,
-        CB_SETCURSEL,
-        static_cast<int>(settings.dlssMode),
-        0);
-
-    int taaSelection = 0;
-    switch(settings.temporalSampleLimit)
+    if(qualityPanelDragTarget == 0)
     {
-    case 2:
-        taaSelection = 1;
-        break;
-    case 4:
-        taaSelection = 2;
-        break;
-    case 8:
-        taaSelection = 3;
-        break;
-    case 16:
-        taaSelection = 4;
-        break;
-    case 0:
-        taaSelection = 5;
-        break;
-    default:
-        taaSelection = 0;
-        break;
+        qualityPanelPreviewScale = -1;
+        qualityPanelPreviewSteps = -1;
     }
-    SendMessageW(taaCombo, CB_SETCURSEL, taaSelection, 0);
+    InvalidateRect(qualityPanel, nullptr, FALSE);
+    return;
 
-    EnableWindow(dlssCheck, dlssActive ? TRUE : FALSE);
-    EnableWindow(dlssModeCombo, dlssActive ? TRUE : FALSE);
-
-    std::wostringstream scaleText;
-    scaleText << std::fixed << std::setprecision(1)
-              << (100.0 * static_cast<double>(RENDER_WIDTH) /
-                  static_cast<double>(std::max(WIDTH, 1)))
-              << L"%  " << RENDER_WIDTH << L"x" << RENDER_HEIGHT;
-    SetWindowTextW(renderScaleValue, scaleText.str().c_str());
-
-    std::wostringstream stepsText;
-    stepsText << settings.maxSteps << L" steps";
-    SetWindowTextW(rayStepsValue, stepsText.str().c_str());
-
-    if(dlssActive)
-    {
-        std::wstring text = L"DLSS active | ";
-        text += dlssModeText(settings.dlssMode);
-        text += L" | preset K";
-        SetWindowTextW(dlssStatus, text.c_str());
-    }
-    else
-    {
-        SetWindowTextW(
-            dlssStatus,
-            settings.dlss
-                ? L"DLSS unavailable | native compositor fallback"
-                : L"DLSS disabled | native compositor fallback");
-    }
-
-    SetWindowTextW(
-        statusLabel,
-        settings.rayTracing
-            ? L"Ray tracing: ON | frame pacing: unlimited"
-            : L"Ray tracing: OFF | frame pacing: unlimited");
-
-    std::wostringstream outputText;
-    outputText << L"Output: " << WIDTH << L"x" << HEIGHT
-               << L" | API: Direct3D 12";
-    SetWindowTextW(outputLabel, outputText.str().c_str());
 }
 
 void D3D12Engine::toggleQualityPanel()

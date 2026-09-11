@@ -112,6 +112,11 @@ private:
     HBRUSH qualityPanelBrush = nullptr;
     bool qualityPanelVisible = true;
     std::vector<HWND> qualityControls;
+    int qualityPanelDragTarget = 0;
+    int qualityPanelPreviewScale = -1;
+    int qualityPanelPreviewSteps = -1;
+    bool qualityTaaMenuOpen = false;
+    double currentFps = 0.0;
 
     ComPtr<IDXGIFactory6> factory;
     ComPtr<ID3D12Device> device;
@@ -217,6 +222,11 @@ private:
     void updateQualityPanel();
     void toggleQualityPanel();
     void updateQualityFps(double fps);
+    void paintQualityPanel(HDC dc);
+    LRESULT handleQualityPanelMessage(
+        UINT message,
+        WPARAM wParam,
+        LPARAM lParam);
     void handleQualityCommand(WPARAM wParam, LPARAM lParam);
     void handleQualityScroll(WPARAM wParam, LPARAM lParam);
     void resetQualityDefaults();
@@ -284,6 +294,11 @@ private:
         WPARAM wParam,
         LPARAM lParam);
     static LRESULT CALLBACK renderWindowProc(
+        HWND window,
+        UINT message,
+        WPARAM wParam,
+        LPARAM lParam);
+    static LRESULT CALLBACK qualityPanelProc(
         HWND window,
         UINT message,
         WPARAM wParam,

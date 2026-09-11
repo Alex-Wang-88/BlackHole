@@ -30,10 +30,9 @@ writes directly into UAV textures used by the D3D12 compositor.
   changes on release. It provides live controls for ray tracing, render scale,
   ray integration steps, DLSS mode, temporal samples, VSync, and
   reset-to-defaults. Press `F1` to show or hide it.
-- Camera interaction uses an adaptive preview path: while orbiting, the ray
-  integrator is temporarily capped at 1024 steps so a max-quality still-image
-  setting remains responsive. After 180ms without camera input, the selected
-  integration limit is restored and a fresh high-quality sample is rendered.
+- The main window is resizable. The render surface follows the client area,
+  the quality sidebar stays docked at 320px on the right, and presentation,
+  depth, ray, and DLSS resources are rebuilt after interactive resizing.
 
 ## Requirements
 

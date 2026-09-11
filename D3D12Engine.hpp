@@ -14,7 +14,6 @@
 #endif
 
 #include <cstdint>
-#include <chrono>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -60,13 +59,11 @@ private:
     static constexpr UINT DLSS_DEPTH_UAV_INDEX = 10;
     static constexpr UINT DLSS_MOTION_VECTOR_UAV_INDEX = 11;
     static constexpr int QUALITY_PANEL_WIDTH = 320;
-    // Camera interaction uses a bounded preview workload so a max-quality
-    // still image does not turn into a single-digit-FPS viewport while the
-    // user is orbiting. The selected setting is restored after the camera
-    // settles.
-    static constexpr std::uint32_t MOTION_PREVIEW_MAX_STEPS = 1024;
-    static constexpr std::chrono::milliseconds MOTION_PREVIEW_HOLD{180};
-
+    static constexpr int MIN_RENDER_WIDTH = 320;
+    static constexpr int MIN_RENDER_HEIGHT = 240;
+    static constexpr DWORD MAIN_WINDOW_STYLE =
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX |
+        WS_MAXIMIZEBOX | WS_THICKFRAME | WS_CLIPCHILDREN;
     enum QualityControlId : int
     {
         IDC_QUALITY_RAYTRACE = 4101,
@@ -89,6 +86,10 @@ private:
     HWND renderWindowHandle = nullptr;
     bool closing = false;
     bool allowTearing = false;
+    bool windowSizing = false;
+    bool resizePending = false;
+    int pendingClientWidth = 0;
+    int pendingClientHeight = 0;
 
     HWND qualityPanel = nullptr;
     HWND fpsLabel = nullptr;
@@ -181,8 +182,6 @@ private:
     float currentJitterX = 0.0f;
     float currentJitterY = 0.0f;
     bool dlssActive = false;
-    bool motionPreviewActive = false;
-    std::chrono::steady_clock::time_point lastCameraChangeTime{};
 
 #ifdef BLACKHOLE_HAS_STREAMLINE
     struct StreamlineApi
@@ -227,7 +226,10 @@ private:
 
     void createWindow();
     void createQualityPanel();
-    void layoutQualityPanel();
+    void layoutQualityPanel(
+        int displayRenderWidth = -1,
+        int displayRenderHeight = -1);
+    void resizePresentation(int clientWidth, int clientHeight);
     void updateQualityPanel();
     void toggleQualityPanel();
     void updateQualityFps(double fps);
@@ -243,7 +245,10 @@ private:
     void applyRaySteps(int steps);
     void applyTemporalSamples(int selection);
     void applyDlssMode(int selection);
-    void recreateRayResources(int renderWidth, int renderHeight);
+    void recreateRayResources(
+        int renderWidth,
+        int renderHeight,
+        bool force = false);
     void resetAccumulation();
     void initializeD3D12();
     void createDeviceAndQueue();
@@ -260,10 +265,7 @@ private:
     void connectStreamlineDevice();
     void shutdownStreamline();
 
-    void recordRaytrace(
-        double schwarzschildRadius,
-        float aspect,
-        std::uint32_t maxSteps);
+    void recordRaytrace(double schwarzschildRadius, float aspect);
     bool recordDlss(bool cameraChanged);
     void recordGraphics(
         double schwarzschildRadius,

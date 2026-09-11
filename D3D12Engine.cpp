@@ -1120,7 +1120,9 @@ LRESULT CALLBACK D3D12Engine::qualityPanelProc(
     return DefWindowProcW(window, message, wParam, lParam);
 }
 
-void D3D12Engine::layoutQualityPanel()
+void D3D12Engine::layoutQualityPanel(
+    int displayRenderWidth,
+    int displayRenderHeight)
 {
     if(windowHandle == nullptr)
         return;
@@ -1129,17 +1131,94 @@ void D3D12Engine::layoutQualityPanel()
     GetClientRect(windowHandle, &clientRect);
     const int clientWidth = std::max<int>(clientRect.right, 1);
     const int clientHeight = std::max<int>(clientRect.bottom, 1);
-    const int panelWidth = std::min(
-        QUALITY_PANEL_WIDTH,
-        std::max(clientWidth - WIDTH, 0));
-    const int panelX = std::min(WIDTH, clientWidth);
+    const int renderWidth = displayRenderWidth > 0
+                                ? displayRenderWidth
+                                : WIDTH;
+    const int renderHeight = displayRenderHeight > 0
+                                 ? displayRenderHeight
+                                 : HEIGHT;
+    const int panelX = std::min(renderWidth, clientWidth);
+    const int panelWidth = std::max(clientWidth - panelX, 0);
 
     if(renderWindowHandle != nullptr)
-        MoveWindow(renderWindowHandle, 0, 0, WIDTH, HEIGHT, TRUE);
+        MoveWindow(renderWindowHandle, 0, 0, renderWidth, renderHeight, TRUE);
     if(qualityPanel != nullptr)
         MoveWindow(qualityPanel, panelX, 0, panelWidth, clientHeight, TRUE);
     if(fpsLabel != nullptr)
         MoveWindow(fpsLabel, 12, 10, 180, 28, TRUE);
+}
+
+void D3D12Engine::resizePresentation(int clientWidth, int clientHeight)
+{
+    clientWidth = std::max(clientWidth, MIN_RENDER_WIDTH + QUALITY_PANEL_WIDTH);
+    clientHeight = std::max(clientHeight, MIN_RENDER_HEIGHT);
+    const int newWidth = clientWidth - QUALITY_PANEL_WIDTH;
+    const int newHeight = clientHeight;
+
+    if(swapChain == nullptr || commandQueue == nullptr)
+    {
+        layoutQualityPanel(newWidth, newHeight);
+        return;
+    }
+
+    if(newWidth == WIDTH && newHeight == HEIGHT)
+    {
+        layoutQualityPanel();
+        return;
+    }
+
+    waitForGpu();
+    for(auto& renderTarget : renderTargets)
+        renderTarget.Reset();
+    depthBuffer.Reset();
+    rtvHeap.Reset();
+    dsvHeap.Reset();
+
+    const UINT resizeFlags = allowTearing
+                                 ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING
+                                 : 0u;
+    throwIfFailed(
+        swapChain->ResizeBuffers(
+            FRAME_COUNT,
+            static_cast<UINT>(newWidth),
+            static_cast<UINT>(newHeight),
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            resizeFlags),
+        "IDXGISwapChain3::ResizeBuffers");
+
+    WIDTH = newWidth;
+    HEIGHT = newHeight;
+    backBufferIndex = swapChain->GetCurrentBackBufferIndex();
+    createRenderTargets();
+    createDepthBuffer();
+
+#ifdef BLACKHOLE_HAS_STREAMLINE
+    if(dlssActive && dlssSetOptions != nullptr)
+    {
+        dlssOptions.outputWidth = static_cast<std::uint32_t>(WIDTH);
+        dlssOptions.outputHeight = static_cast<std::uint32_t>(HEIGHT);
+        const sl::Result result = dlssSetOptions(dlssViewport, dlssOptions);
+        if(result != sl::Result::eOk)
+        {
+            std::cerr << "DLSS output resize was rejected (code "
+                      << static_cast<int>(result)
+                      << "); using the native compositor after resize.\n";
+            dlssActive = false;
+        }
+    }
+#endif
+
+    const float scale = std::clamp(settings.renderScale, 0.25f, 1.0f);
+    const int renderWidth = std::clamp(
+        static_cast<int>(std::lround(static_cast<float>(WIDTH) * scale)),
+        64,
+        8192);
+    const int renderHeight = std::clamp(
+        static_cast<int>(std::lround(static_cast<float>(HEIGHT) * scale)),
+        64,
+        8192);
+    recreateRayResources(renderWidth, renderHeight, true);
+    layoutQualityPanel();
 }
 
 void D3D12Engine::updateQualityFps(double fps)
@@ -1195,11 +1274,16 @@ void D3D12Engine::resetAccumulation()
     currentJitterY = 0.0f;
 }
 
-void D3D12Engine::recreateRayResources(int renderWidth, int renderHeight)
+void D3D12Engine::recreateRayResources(
+    int renderWidth,
+    int renderHeight,
+    bool force)
 {
     renderWidth = std::clamp(renderWidth, 64, 8192);
     renderHeight = std::clamp(renderHeight, 64, 8192);
-    if(renderWidth == RENDER_WIDTH && renderHeight == RENDER_HEIGHT)
+    if(!force &&
+       renderWidth == RENDER_WIDTH &&
+       renderHeight == RENDER_HEIGHT)
     {
         resetAccumulation();
         updateQualityPanel();
@@ -1466,18 +1550,15 @@ void D3D12Engine::createWindow()
         throw std::runtime_error("Register render window class failed");
     }
 
-    constexpr DWORD windowStyle =
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX |
-        WS_CLIPCHILDREN;
     RECT clientRect{0, 0, WIDTH + QUALITY_PANEL_WIDTH, HEIGHT};
-    if(!AdjustWindowRect(&clientRect, windowStyle, FALSE))
+    if(!AdjustWindowRect(&clientRect, MAIN_WINDOW_STYLE, FALSE))
         throw std::runtime_error("AdjustWindowRect failed");
 
     windowHandle = CreateWindowExW(
         0,
         windowClass.lpszClassName,
         L"Black Hole - Direct3D 12",
-        windowStyle,
+        MAIN_WINDOW_STYLE,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
         clientRect.right - clientRect.left,
@@ -2673,7 +2754,6 @@ void D3D12Engine::render(double schwarzschildRadius, bool rayTracing)
         glm::length(camera.pos - previousCameraPos) > 1.0e4f ||
         glm::length(camera.target - previousCameraTarget) > 1.0e4f ||
         std::fabs(camera.fovY - previousCameraFov) > 1.0e-5f;
-    const auto now = std::chrono::steady_clock::now();
     if(cameraChanged)
     {
         accumulatedSampleCount = 0;
@@ -2681,27 +2761,7 @@ void D3D12Engine::render(double schwarzschildRadius, bool rayTracing)
         previousCameraTarget = camera.target;
         previousCameraFov = camera.fovY;
         hasPreviousCamera = true;
-        lastCameraChangeTime = now;
     }
-
-    const bool cameraIsInMotion =
-        camera.dragging ||
-        (lastCameraChangeTime.time_since_epoch().count() != 0 &&
-         now - lastCameraChangeTime < MOTION_PREVIEW_HOLD);
-    if(!cameraIsInMotion && motionPreviewActive)
-    {
-        // Keep the latest camera transform, but force one fresh sample with
-        // the user's selected quality after the lightweight motion preview.
-        accumulatedSampleCount = 0;
-        currentJitterX = 0.0f;
-        currentJitterY = 0.0f;
-    }
-    motionPreviewActive = cameraIsInMotion;
-    const std::uint32_t activeMaxSteps = cameraIsInMotion
-                                             ? std::min(
-                                                   settings.maxSteps,
-                                                   MOTION_PREVIEW_MAX_STEPS)
-                                             : settings.maxSteps;
 
     const bool sampleLimitReached =
         settings.temporalSampleLimit != 0 &&
@@ -2709,7 +2769,7 @@ void D3D12Engine::render(double schwarzschildRadius, bool rayTracing)
     currentJitterX = 0.0f;
     currentJitterY = 0.0f;
     if(rayTracing && !sampleLimitReached)
-        recordRaytrace(schwarzschildRadius, aspect, activeMaxSteps);
+        recordRaytrace(schwarzschildRadius, aspect);
     else
         transitionTexture(
             outputTexture.Get(),
@@ -2722,14 +2782,17 @@ void D3D12Engine::render(double schwarzschildRadius, bool rayTracing)
         materialTextureState,
         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
-    recordGraphics(schwarzschildRadius, aspect, !rayTracing, useDlss);
+    recordGraphics(
+        schwarzschildRadius,
+        aspect,
+        !rayTracing,
+        useDlss);
     executeFrame();
 }
 
 void D3D12Engine::recordRaytrace(
     double schwarzschildRadius,
-    float aspect,
-    std::uint32_t maxSteps)
+    float aspect)
 {
     transitionTexture(
         outputTexture.Get(),
@@ -2763,7 +2826,7 @@ void D3D12Engine::recordRaytrace(
     constants.aspect = aspect;
     constants.renderWidth = static_cast<std::uint32_t>(RENDER_WIDTH);
     constants.renderHeight = static_cast<std::uint32_t>(RENDER_HEIGHT);
-    constants.maxSteps = maxSteps;
+    constants.maxSteps = settings.maxSteps;
     constants.dLambda = static_cast<float>(
         D_LAMBDA_METERS / schwarzschildRadius);
     constants.escapeR = static_cast<float>(
@@ -3186,7 +3249,8 @@ void D3D12Engine::recordGraphics(
             0.5f - centerNdcY * 0.5f,
             radius,
             aspect);
-        constants.fallbackEnabled = drawFallback && radius > 1.0e-5f ? 1u : 0u;
+        constants.fallbackEnabled =
+            drawFallback && radius > 1.0e-5f ? 1u : 0u;
     }
 
     commandList->SetPipelineState(compositePipeline.Get());
@@ -3484,9 +3548,69 @@ LRESULT D3D12Engine::handleMessage(
         handleQualityScroll(wParam, lParam);
         return 0;
 
+    case WM_GETMINMAXINFO:
+    {
+        auto* minimumInfo = reinterpret_cast<MINMAXINFO*>(lParam);
+        RECT minimumRect{
+            0,
+            0,
+            MIN_RENDER_WIDTH + QUALITY_PANEL_WIDTH,
+            MIN_RENDER_HEIGHT};
+        if(AdjustWindowRect(&minimumRect, MAIN_WINDOW_STYLE, FALSE))
+        {
+            minimumInfo->ptMinTrackSize.x = minimumRect.right - minimumRect.left;
+            minimumInfo->ptMinTrackSize.y = minimumRect.bottom - minimumRect.top;
+        }
+        return 0;
+    }
+
+    case WM_ENTERSIZEMOVE:
+        windowSizing = true;
+        return 0;
+
+    case WM_EXITSIZEMOVE:
+        windowSizing = false;
+        if(resizePending)
+        {
+            resizePending = false;
+            resizePresentation(pendingClientWidth, pendingClientHeight);
+        }
+        return 0;
+
     case WM_SIZE:
-        if(qualityPanel != nullptr)
-            layoutQualityPanel();
+        if(wParam == SIZE_MINIMIZED)
+            return 0;
+
+        {
+            const int clientWidth = std::max<int>(
+                static_cast<int>(LOWORD(lParam)),
+                1);
+            const int clientHeight = std::max<int>(
+                static_cast<int>(HIWORD(lParam)),
+                1);
+            if(device != nullptr && swapChain != nullptr)
+            {
+                if(windowSizing)
+                {
+                    pendingClientWidth = clientWidth;
+                    pendingClientHeight = clientHeight;
+                    resizePending = true;
+                    layoutQualityPanel(
+                        std::max(
+                            clientWidth - QUALITY_PANEL_WIDTH,
+                            MIN_RENDER_WIDTH),
+                        std::max(clientHeight, MIN_RENDER_HEIGHT));
+                }
+                else
+                {
+                    resizePresentation(clientWidth, clientHeight);
+                }
+            }
+            else if(qualityPanel != nullptr)
+            {
+                layoutQualityPanel();
+            }
+        }
         return 0;
 
     case WM_CTLCOLORSTATIC:

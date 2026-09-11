@@ -79,6 +79,7 @@ private:
     std::filesystem::path shaderDirectory;
     HINSTANCE instance = nullptr;
     HWND windowHandle = nullptr;
+    HWND renderWindowHandle = nullptr;
     bool closing = false;
     bool allowTearing = false;
 
@@ -278,6 +279,11 @@ private:
         const std::filesystem::path& shaderDirectory);
 
     static LRESULT CALLBACK windowProc(
+        HWND window,
+        UINT message,
+        WPARAM wParam,
+        LPARAM lParam);
+    static LRESULT CALLBACK renderWindowProc(
         HWND window,
         UINT message,
         WPARAM wParam,

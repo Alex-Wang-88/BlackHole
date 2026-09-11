@@ -12,7 +12,7 @@
 - 光追也可以关闭，关闭后保留轻量的黑洞轮廓、吸积环和三维网格视图。
 - 默认不限帧。VSync 仍关闭，实时 FPS 会显示在左上角。
 - 为 NVIDIA Optimus 和 AMD PowerXpress 笔记本增加了优先选择独立显卡的导出标记。
-- 增加了窗口内的详细画质面板，可实时调整光追、渲染比例、光线积分步数、DLSS 模式、时间累积采样数和 VSync，也可以一键恢复默认值。按 `F1` 显示或隐藏面板。
+- 增加了同一窗口内的详细画质侧栏：左侧保持原来的渲染区域，右侧增加画质控制，不覆盖渲染画面。可实时调整光追、渲染比例、光线积分步数、DLSS 模式、时间累积采样数和 VSync，也可以一键恢复默认值。按 `F1` 显示或隐藏侧栏。
 
 ## 环境要求
 
@@ -46,7 +46,7 @@ cmake --build build --config Release --parallel
 
 | 变量 | 默认值 | 作用 |
 | --- | ---: | --- |
-| `BLACKHOLE_WINDOW_WIDTH` / `BLACKHOLE_WINDOW_HEIGHT` | `800` / `600` | 窗口大小 |
+| `BLACKHOLE_WINDOW_WIDTH` / `BLACKHOLE_WINDOW_HEIGHT` | `800` / `600` | 左侧渲染区域/输出大小；整体窗口右侧会额外增加 320px 画质侧栏 |
 | `BLACKHOLE_RENDER_SCALE` | `0.6667` | GPU 渲染分辨率相对窗口的比例，范围 `0.25` 到 `4.0` |
 | `BLACKHOLE_RENDER_WIDTH` / `BLACKHOLE_RENDER_HEIGHT` | 窗口大小乘比例 | 显式指定 GPU 渲染分辨率 |
 | `BLACKHOLE_RAYTRACE` | `1` | 设为 `0` 使用轻量光栅 fallback |
@@ -72,7 +72,7 @@ $env:BLACKHOLE_VSYNC = '0'
 - 鼠标左键拖动：环绕黑洞旋转相机
 - `Shift` + 鼠标左键拖动：平移相机目标
 - 鼠标滚轮：拉近或拉远
-- `F1`：显示或隐藏详细画质面板
+- `F1`：显示或隐藏右侧详细画质侧栏
 
 面板中的 `Quality（最高质量）` 是 DLSS Super Resolution 的最高质量档位。渲染比例和积分步数可以独立调整：前者控制输入分辨率，后者控制每条光线的计算精度，两者都不会改变窗口输出分辨率。面板内的改动只对当前运行有效；如需可复现的启动配置，请使用环境变量。
 

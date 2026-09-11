@@ -328,6 +328,15 @@ D3D12Engine::~D3D12Engine()
         }
     }
 
+    // The swap chain and command queue are Streamline proxies when DLSS is
+    // enabled. Release those proxy interfaces before unloading Streamline;
+    // otherwise their COM destructors can jump into the unloaded DLL during
+    // member cleanup.
+    for(auto& renderTarget : renderTargets)
+        renderTarget.Reset();
+    swapChain.Reset();
+    commandQueue.Reset();
+
     shutdownStreamline();
 
     if(objectBuffer != nullptr && objectBufferMapped != nullptr)
@@ -340,12 +349,19 @@ D3D12Engine::~D3D12Engine()
         fenceEvent = nullptr;
     }
 
+    if(renderWindowHandle != nullptr && IsWindow(renderWindowHandle))
+        DestroyWindow(renderWindowHandle);
+    renderWindowHandle = nullptr;
+
     if(windowHandle != nullptr && IsWindow(windowHandle))
         DestroyWindow(windowHandle);
     windowHandle = nullptr;
 
     if(instance != nullptr)
+    {
+        UnregisterClassW(L"BlackHoleD3D12RenderWindow", instance);
         UnregisterClassW(L"BlackHoleD3D12Window", instance);
+    }
 
     if(uiFont != nullptr)
         DeleteObject(uiFont);
@@ -641,13 +657,17 @@ void D3D12Engine::layoutQualityPanel()
     GetClientRect(windowHandle, &clientRect);
     const int clientWidth = std::max<int>(clientRect.right, 1);
     const int clientHeight = std::max<int>(clientRect.bottom, 1);
-    const int panelWidth = std::min(QUALITY_PANEL_WIDTH, clientWidth);
-    const int panelX = clientWidth - panelWidth;
+    const int panelWidth = std::min(
+        QUALITY_PANEL_WIDTH,
+        std::max(clientWidth - WIDTH, 0));
+    const int panelX = std::min(WIDTH, clientWidth);
     const int left = panelX + 16;
     const int contentWidth = std::max(panelWidth - 32, 120);
     const int valueWidth = 72;
     const int trackWidth = std::max(contentWidth - valueWidth - 8, 80);
 
+    if(renderWindowHandle != nullptr)
+        MoveWindow(renderWindowHandle, 0, 0, WIDTH, HEIGHT, TRUE);
     MoveWindow(qualityPanel, panelX, 0, panelWidth, clientHeight, TRUE);
     MoveWindow(fpsLabel, 12, 10, 180, 28, TRUE);
     MoveWindow(qualityHeader, left, 12, contentWidth, 24, TRUE);
@@ -1081,9 +1101,19 @@ void D3D12Engine::createWindow()
         throw std::runtime_error("RegisterClassExW failed");
     }
 
+    WNDCLASSEXW renderWindowClass = windowClass;
+    renderWindowClass.lpfnWndProc = &D3D12Engine::renderWindowProc;
+    renderWindowClass.lpszClassName = L"BlackHoleD3D12RenderWindow";
+    if(RegisterClassExW(&renderWindowClass) == 0 &&
+       GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
+    {
+        throw std::runtime_error("Register render window class failed");
+    }
+
     constexpr DWORD windowStyle =
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
-    RECT clientRect{0, 0, WIDTH, HEIGHT};
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX |
+        WS_CLIPCHILDREN;
+    RECT clientRect{0, 0, WIDTH + QUALITY_PANEL_WIDTH, HEIGHT};
     if(!AdjustWindowRect(&clientRect, windowStyle, FALSE))
         throw std::runtime_error("AdjustWindowRect failed");
 
@@ -1102,6 +1132,22 @@ void D3D12Engine::createWindow()
         this);
     if(windowHandle == nullptr)
         throw std::runtime_error("CreateWindowExW failed");
+
+    renderWindowHandle = CreateWindowExW(
+        0,
+        renderWindowClass.lpszClassName,
+        L"",
+        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
+        0,
+        0,
+        WIDTH,
+        HEIGHT,
+        windowHandle,
+        nullptr,
+        instance,
+        this);
+    if(renderWindowHandle == nullptr)
+        throw std::runtime_error("Create render window failed");
 
     createQualityPanel();
     ShowWindow(windowHandle, SW_SHOW);
@@ -1476,9 +1522,10 @@ void D3D12Engine::createDeviceAndQueue()
     const HRESULT queueResult = queueDevice->CreateCommandQueue(
             &queueDescription,
             IID_PPV_ARGS(&commandQueue));
-    if(streamlineDeviceProxy != nullptr && streamlineDeviceProxy != device.Get())
-        streamlineDeviceProxy->Release();
-    streamlineDeviceProxy = nullptr;
+    // Keep the upgraded device proxy alive until the proxy command queue and
+    // swap chain have been created. Some Streamline runtimes retain the
+    // device proxy from the queue creation path; releasing it here can make
+    // the runtime dereference a destroyed proxy during startup.
     throwIfFailed(queueResult, "ID3D12Device::CreateCommandQueue");
 
     ComPtr<IDXGIFactory5> factory5;
@@ -1525,6 +1572,9 @@ void D3D12Engine::createCommandObjects()
 
 void D3D12Engine::createSwapChain()
 {
+    const HWND presentationWindow = renderWindowHandle != nullptr
+                                        ? renderWindowHandle
+                                        : windowHandle;
     DXGI_SWAP_CHAIN_DESC1 description{};
     description.Width = static_cast<UINT>(WIDTH);
     description.Height = static_cast<UINT>(HEIGHT);
@@ -1548,7 +1598,7 @@ void D3D12Engine::createSwapChain()
 
     const HRESULT swapChainResult = swapChainFactory->CreateSwapChainForHwnd(
             commandQueue.Get(),
-            windowHandle,
+            presentationWindow,
             &description,
             nullptr,
             nullptr,
@@ -1561,7 +1611,9 @@ void D3D12Engine::createSwapChain()
         swapChain1.As(&swapChain),
         "Query IDXGISwapChain3");
     throwIfFailed(
-        factory->MakeWindowAssociation(windowHandle, DXGI_MWA_NO_ALT_ENTER),
+        factory->MakeWindowAssociation(
+            presentationWindow,
+            DXGI_MWA_NO_ALT_ENTER),
         "MakeWindowAssociation");
     backBufferIndex = swapChain->GetCurrentBackBufferIndex();
 }
@@ -2979,6 +3031,44 @@ LRESULT CALLBACK D3D12Engine::windowProc(
         GWLP_USERDATA));
     if(engine != nullptr)
         return engine->handleMessage(message, wParam, lParam);
+    return DefWindowProcW(window, message, wParam, lParam);
+}
+
+LRESULT CALLBACK D3D12Engine::renderWindowProc(
+    HWND window,
+    UINT message,
+    WPARAM wParam,
+    LPARAM lParam)
+{
+    if(message == WM_NCCREATE)
+    {
+        const CREATESTRUCTW* create = reinterpret_cast<const CREATESTRUCTW*>(lParam);
+        auto* engine = static_cast<D3D12Engine*>(create->lpCreateParams);
+        SetWindowLongPtrW(
+            window,
+            GWLP_USERDATA,
+            reinterpret_cast<LONG_PTR>(engine));
+    }
+
+    auto* engine = reinterpret_cast<D3D12Engine*>(GetWindowLongPtrW(
+        window,
+        GWLP_USERDATA));
+    if(engine != nullptr)
+    {
+        if(handleCameraMessage(window, message, wParam, lParam))
+            return 0;
+
+        if(message == WM_KEYDOWN &&
+           (wParam == VK_F1 || wParam == VK_ESCAPE))
+        {
+            PostMessageW(engine->windowHandle, message, wParam, lParam);
+            return 0;
+        }
+
+        if(message == WM_ERASEBKGND)
+            return 1;
+    }
+
     return DefWindowProcW(window, message, wParam, lParam);
 }
 

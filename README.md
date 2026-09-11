@@ -22,9 +22,11 @@ writes directly into UAV textures used by the D3D12 compositor.
   quality panel shows the measured FPS in the upper-left corner.
 - Added discrete-GPU preference exports for NVIDIA Optimus and AMD PowerXpress
   laptops.
-- Added an in-window image-quality panel with live controls for ray tracing,
-  render scale, ray integration steps, DLSS mode, temporal samples, VSync,
-  and reset-to-defaults. Press `F1` to show or hide it.
+- Added a side-by-side image-quality panel in the same window. The left
+  rendering area keeps its configured size while a 320px control sidebar is
+  added on the right, with live controls for ray tracing, render scale, ray
+  integration steps, DLSS mode, temporal samples, VSync, and reset-to-defaults.
+  Press `F1` to show or hide it.
 
 ## Requirements
 
@@ -59,7 +61,7 @@ All settings are optional environment variables:
 
 | Variable | Default | Meaning |
 | --- | ---: | --- |
-| `BLACKHOLE_WINDOW_WIDTH` / `BLACKHOLE_WINDOW_HEIGHT` | `800` / `600` | Window size |
+| `BLACKHOLE_WINDOW_WIDTH` / `BLACKHOLE_WINDOW_HEIGHT` | `800` / `600` | Left render/output size; the app window adds a 320px quality sidebar |
 | `BLACKHOLE_RENDER_SCALE` | `0.6667` | GPU render size relative to the window, `0.25` to `4.0` |
 | `BLACKHOLE_RENDER_WIDTH` / `BLACKHOLE_RENDER_HEIGHT` | scaled window size | Explicit GPU render size |
 | `BLACKHOLE_RAYTRACE` | `1` | Set to `0` to use the lightweight raster fallback |
@@ -86,7 +88,7 @@ removing it entirely would allow a bad ray or driver timeout to hang the GPU.
 - Left mouse drag: orbit around the black hole
 - `Shift` + left mouse drag: pan the camera target
 - Mouse wheel: zoom in or out
-- `F1`: show or hide the detailed image-quality panel
+- `F1`: show or hide the right-side detailed image-quality panel
 
 The panel's default `Quality (highest)` DLSS option is the highest-quality
 DLSS Super Resolution mode. The panel's render-scale and integration-step

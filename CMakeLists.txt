@@ -10,6 +10,18 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+option(BLACKHOLE_ENABLE_DLSS
+    "Enable the optional NVIDIA Streamline DLSS integration"
+    ON)
+set(BLACKHOLE_STREAMLINE_SDK_ROOT
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/streamline"
+    CACHE PATH
+    "Streamline SDK root containing include/ and (optionally) bin/")
+set(BLACKHOLE_STREAMLINE_RUNTIME_DIR
+    ""
+    CACHE PATH
+    "Directory containing sl.interposer.dll, sl.common.dll, sl.dlss.dll and nvngx_dlss.dll")
+
 include(FetchContent)
 
 set(GLM_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -43,7 +55,50 @@ target_link_libraries(
     d3dcompiler
     user32
     gdi32
+    comctl32
     winmm)
+
+if(BLACKHOLE_ENABLE_DLSS)
+    if(EXISTS "${BLACKHOLE_STREAMLINE_SDK_ROOT}/include/sl.h")
+        target_include_directories(
+            BlackHole
+            PRIVATE
+            "${BLACKHOLE_STREAMLINE_SDK_ROOT}/include")
+        target_compile_definitions(BlackHole PRIVATE BLACKHOLE_HAS_STREAMLINE=1)
+
+        set(_blackhole_streamline_runtime "${BLACKHOLE_STREAMLINE_RUNTIME_DIR}")
+        if(_blackhole_streamline_runtime STREQUAL "")
+            if(EXISTS "${BLACKHOLE_STREAMLINE_SDK_ROOT}/bin/x64/sl.interposer.dll")
+                set(_blackhole_streamline_runtime
+                    "${BLACKHOLE_STREAMLINE_SDK_ROOT}/bin/x64")
+            else()
+                set(_blackhole_streamline_runtime
+                    "${BLACKHOLE_STREAMLINE_SDK_ROOT}/bin")
+            endif()
+        endif()
+
+        foreach(_dlss_runtime IN ITEMS
+                sl.interposer.dll
+                sl.common.dll
+                sl.dlss.dll
+                nvngx_dlss.dll)
+            if(EXISTS "${_blackhole_streamline_runtime}/${_dlss_runtime}")
+                add_custom_command(TARGET BlackHole POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${_blackhole_streamline_runtime}/${_dlss_runtime}"
+                        "$<TARGET_FILE_DIR:BlackHole>/${_dlss_runtime}")
+            else()
+                message(WARNING
+                    "DLSS runtime file not found: ${_blackhole_streamline_runtime}/${_dlss_runtime}. "
+                    "The executable will build, but it will use the native fallback until the file is installed.")
+            endif()
+        endforeach()
+    else()
+        message(WARNING
+            "Streamline headers were not found under ${BLACKHOLE_STREAMLINE_SDK_ROOT}. "
+            "Building without DLSS; set BLACKHOLE_STREAMLINE_SDK_ROOT to enable it.")
+    endif()
+endif()
 
 if(MSVC)
     target_compile_definitions(BlackHole PRIVATE _CRT_SECURE_NO_WARNINGS)

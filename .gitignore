@@ -19,3 +19,8 @@ compile_commands.json
 *.obj
 *.d
 *.log
+
+# NVIDIA Streamline/DLSS runtime binaries are supplied separately and are not
+# committed to the fork.
+/third_party/streamline/bin/*.dll
+/third_party/streamline/bin/*.license.txt

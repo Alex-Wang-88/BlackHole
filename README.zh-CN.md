@@ -8,11 +8,11 @@
 
 - 用原生 D3D12 Compute/Graphics 管线替换了 macOS 专用的 Metal 和 Objective-C++ 路径。
 - 测地线积分仍全部放在显卡上，并移除了“显卡 → CPU → 显卡”的每帧回读/上传。
-- 默认开启 GPU 光追，使用 `256×192` 工作分辨率、`6144` 步积分和 1 帧时间累积；在已测试的 RTX 5060 Laptop GPU 上以 60 FPS 为目标。若优先画质，仍可通过 `BLACKHOLE_TAA_SAMPLES` 调高累积帧数。
+- 默认开启 GPU 光追，使用 `533×400` 工作分辨率、`6144` 步积分和 1 帧时间累积；输出为 `800×600`，DLSS 默认使用 `Quality（最高质量）` 模式。
 - 光追也可以关闭，关闭后保留轻量的黑洞轮廓、吸积环和三维网格视图。
-- 默认目标帧率为 60 FPS。VSync 仍关闭，由程序自身稳定限帧。
+- 默认不限帧。VSync 仍关闭，实时 FPS 会显示在左上角。
 - 为 NVIDIA Optimus 和 AMD PowerXpress 笔记本增加了优先选择独立显卡的导出标记。
-- 分辨率、积分步数、时间累积采样数和垂直同步均可通过环境变量调整。
+- 增加了窗口内的详细画质面板，可实时调整光追、渲染比例、光线积分步数、DLSS 模式、时间累积采样数和 VSync，也可以一键恢复默认值。按 `F1` 显示或隐藏面板。
 
 ## 环境要求
 
@@ -47,12 +47,13 @@ cmake --build build --config Release --parallel
 | 变量 | 默认值 | 作用 |
 | --- | ---: | --- |
 | `BLACKHOLE_WINDOW_WIDTH` / `BLACKHOLE_WINDOW_HEIGHT` | `800` / `600` | 窗口大小 |
-| `BLACKHOLE_RENDER_SCALE` | `0.32` | GPU 渲染分辨率相对窗口的比例，范围 `0.25` 到 `4.0` |
+| `BLACKHOLE_RENDER_SCALE` | `0.6667` | GPU 渲染分辨率相对窗口的比例，范围 `0.25` 到 `4.0` |
 | `BLACKHOLE_RENDER_WIDTH` / `BLACKHOLE_RENDER_HEIGHT` | 窗口大小乘比例 | 显式指定 GPU 渲染分辨率 |
 | `BLACKHOLE_RAYTRACE` | `1` | 设为 `0` 使用轻量光栅 fallback |
 | `BLACKHOLE_MAX_STEPS` | `6144` | 每条光线的最大测地线积分步数 |
 | `BLACKHOLE_TAA_SAMPLES` | `1` | 开启光追时的时间累积上限；`0` 表示不设上限 |
-| `BLACKHOLE_TARGET_FPS` | `60` | 目标帧率；`0` 表示不限帧 |
+| `BLACKHOLE_DLSS` | `1` | Streamline 运行库可用时开启 NVIDIA DLSS |
+| `BLACKHOLE_DLSS_MODE` | `quality` | `quality`、`balanced`、`performance` 或 `ultraperformance` |
 | `BLACKHOLE_VSYNC` | `0` | 设为 `1` 开启垂直同步 |
 
 例如使用 2560×1600 GPU 渲染并保持不限帧：
@@ -71,6 +72,11 @@ $env:BLACKHOLE_VSYNC = '0'
 - 鼠标左键拖动：环绕黑洞旋转相机
 - `Shift` + 鼠标左键拖动：平移相机目标
 - 鼠标滚轮：拉近或拉远
+- `F1`：显示或隐藏详细画质面板
+
+面板中的 `Quality（最高质量）` 是 DLSS Super Resolution 的最高质量档位。渲染比例和积分步数可以独立调整：前者控制输入分辨率，后者控制每条光线的计算精度，两者都不会改变窗口输出分辨率。面板内的改动只对当前运行有效；如需可复现的启动配置，请使用环境变量。
+
+DLSS 使用 NVIDIA Streamline 的 D3D12 接入。公开头文件位于 `third_party/streamline/include`；签名运行库 DLL 不提交到仓库，需要放到 `third_party/streamline/bin`，或通过 `BLACKHOLE_STREAMLINE_RUNTIME_DIR` 指定目录。
 
 移动相机会清空时间累积。关闭光追时，光追图层透明，但会保留轻量的黑洞轮廓、吸积环和三维透视网格。
 

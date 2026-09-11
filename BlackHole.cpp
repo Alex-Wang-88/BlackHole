@@ -5,7 +5,6 @@
 #include <filesystem>
 #include <iostream>
 #include <string>
-#include <thread>
 
 #ifdef _WIN32
 #include <mmsystem.h>
@@ -57,29 +56,6 @@ std::filesystem::path resolveShaderDirectory(const char* executablePath)
     return executableDirectory;
 }
 
-template<typename Clock>
-void paceUntil(typename Clock::time_point deadline)
-{
-    while(true)
-    {
-        const auto now = Clock::now();
-        if(now >= deadline) return;
-
-        const auto remaining = deadline - now;
-        if(remaining > std::chrono::milliseconds(3))
-        {
-            // Short sleeps avoid crossing the next scheduler quantum on
-            // Windows, then the final few milliseconds are handled by yield.
-            // This keeps the 60 FPS cap from falling to an accidental 30 FPS
-            // cadence on systems with coarse sleep granularity.
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-        else
-        {
-            std::this_thread::yield();
-        }
-    }
-}
 }
 
 int main(int argc, char** argv)
@@ -95,11 +71,12 @@ int main(int argc, char** argv)
         std::cout << "Renderer: Direct3D 12\n";
         std::cout << "Ray tracing: " << (settings.rayTracing ? "on" : "off")
                   << "\n";
-        std::cout << "VSync: " << (settings.vsync ? "on" : "off") << "\n";
-        std::cout << "Target FPS: " << (settings.targetFps == 0
-                                             ? "unlimited"
-                                             : std::to_string(settings.targetFps))
+        std::cout << "DLSS: " << (engine.dlssEnabled()
+                                       ? "on (Quality / MaxQuality, preset K)"
+                                       : "off (native compositor fallback)")
                   << "\n";
+        std::cout << "VSync: " << (settings.vsync ? "on" : "off") << "\n";
+        std::cout << "Frame pacing: unlimited (use the quality panel for VSync)\n";
 
         using Clock = std::chrono::steady_clock;
 #ifdef _WIN32
@@ -108,21 +85,13 @@ int main(int argc, char** argv)
         int frameCount = 0;
         double lastPrintTime = std::chrono::duration<double>(
             Clock::now().time_since_epoch()).count();
-        const auto frameBudget = settings.targetFps > 0
-            ? std::chrono::duration_cast<Clock::duration>(
-                  std::chrono::duration<double>(1.0 / settings.targetFps))
-            : Clock::duration::zero();
 
         while(!engine.shouldClose())
         {
             engine.processMessages();
             if(engine.shouldClose()) break;
 
-            const auto frameStart = Clock::now();
-            engine.render(SagA.r_s, settings.rayTracing);
-
-            if(frameBudget > Clock::duration::zero())
-                paceUntil<Clock>(frameStart + frameBudget);
+            engine.render(SagA.r_s, engine.rayTracingEnabled());
 
             ++frameCount;
             const double currentTime = std::chrono::duration<double>(
@@ -132,6 +101,7 @@ int main(int argc, char** argv)
             if(elapsed >= 1.0)
             {
                 const double fps = static_cast<double>(frameCount) / elapsed;
+                engine.updateFps(fps);
                 std::cout << "FPS: " << fps << std::endl;
                 frameCount = 0;
                 lastPrintTime = currentTime;

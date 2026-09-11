@@ -27,6 +27,36 @@ if($null -eq $cmakePath)
 }
 
 $buildDir = Join-Path $projectDir 'build'
-& $cmakePath -S $projectDir -B $buildDir -G 'Visual Studio 17 2022' -A x64
+$cmakeArguments = @()
+
+$streamlineSdkRoot = $env:BLACKHOLE_STREAMLINE_SDK_ROOT
+if([string]::IsNullOrWhiteSpace($streamlineSdkRoot))
+{
+    $siblingStreamlineRoot = Join-Path (Split-Path -Parent $projectDir) 'streamline-src'
+    if(Test-Path -LiteralPath (Join-Path $siblingStreamlineRoot 'include\sl.h'))
+    {
+        $streamlineSdkRoot = $siblingStreamlineRoot
+    }
+}
+if(-not [string]::IsNullOrWhiteSpace($streamlineSdkRoot))
+{
+    $cmakeArguments += "-DBLACKHOLE_STREAMLINE_SDK_ROOT=$streamlineSdkRoot"
+}
+
+$streamlineRuntimeDir = $env:BLACKHOLE_STREAMLINE_RUNTIME_DIR
+if([string]::IsNullOrWhiteSpace($streamlineRuntimeDir))
+{
+    $localRuntimeDir = Join-Path $projectDir 'third_party\streamline\bin'
+    if(Test-Path -LiteralPath (Join-Path $localRuntimeDir 'sl.interposer.dll'))
+    {
+        $streamlineRuntimeDir = $localRuntimeDir
+    }
+}
+if(-not [string]::IsNullOrWhiteSpace($streamlineRuntimeDir))
+{
+    $cmakeArguments += "-DBLACKHOLE_STREAMLINE_RUNTIME_DIR=$streamlineRuntimeDir"
+}
+
+& $cmakePath -S $projectDir -B $buildDir -G 'Visual Studio 17 2022' -A x64 @cmakeArguments
 & $cmakePath --build $buildDir --config Release --parallel
 & (Join-Path $buildDir 'Release\BlackHole.exe')

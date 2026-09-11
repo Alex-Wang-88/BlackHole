@@ -1,13 +1,19 @@
 #include "D3D12Engine.hpp"
 
 #include <d3dcompiler.h>
+#include <commctrl.h>
 
 #include <glm/gtc/matrix_transform.hpp>
+
+#ifdef BLACKHOLE_HAS_STREAMLINE
+#include <sl_dlss.h>
+#endif
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <cstdlib>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -73,6 +79,121 @@ constexpr std::array<std::array<float, 2>, 8> JITTER_OFFSETS =
     {{ 0.375f,  0.000f}},
     {{ 0.000f,  0.000f}}
 }};
+
+constexpr DXGI_FORMAT COLOR_TEXTURE_FORMAT =
+    DXGI_FORMAT_R16G16B16A16_FLOAT;
+constexpr DXGI_FORMAT MATERIAL_TEXTURE_FORMAT =
+    DXGI_FORMAT_R8G8B8A8_UNORM;
+
+#ifdef BLACKHOLE_HAS_STREAMLINE
+template<typename T>
+T loadStreamlineFunction(HMODULE module, const char* name)
+{
+    return reinterpret_cast<T>(GetProcAddress(module, name));
+}
+
+void streamlineLogMessage(sl::LogType type, const char* message)
+{
+    // Keep the console usable while preserving the complete Streamline log
+    // under the runtime directory for diagnostics.
+    if(type == sl::LogType::eInfo)
+        return;
+
+    const char* prefix = "info";
+    if(type == sl::LogType::eWarn) prefix = "warning";
+    if(type == sl::LogType::eError) prefix = "error";
+    std::cerr << "Streamline [" << prefix << "] "
+              << (message != nullptr ? message : "") << "\n";
+}
+
+std::filesystem::path executableDirectory()
+{
+    std::array<wchar_t, 32768> buffer{};
+    const DWORD length = GetModuleFileNameW(
+        nullptr,
+        buffer.data(),
+        static_cast<DWORD>(buffer.size()));
+    if(length == 0 || length >= buffer.size())
+        return std::filesystem::current_path();
+    return std::filesystem::path(buffer.data(), buffer.data() + length)
+        .parent_path();
+}
+
+std::filesystem::path findStreamlineRuntimeDirectory(
+    const std::filesystem::path& shaderDirectory)
+{
+    const char* environmentValue = std::getenv(
+        "BLACKHOLE_STREAMLINE_RUNTIME_DIR");
+    const std::array<std::filesystem::path, 5> candidates =
+    {{
+        environmentValue != nullptr && *environmentValue != '\0'
+            ? std::filesystem::path(environmentValue)
+            : std::filesystem::path(),
+        shaderDirectory,
+        executableDirectory(),
+        shaderDirectory.parent_path() / "third_party" / "streamline" / "bin",
+        std::filesystem::current_path() / "third_party" / "streamline" / "bin"
+    }};
+
+    for(const auto& candidate : candidates)
+    {
+        if(!candidate.empty() &&
+           std::filesystem::exists(candidate / "sl.interposer.dll"))
+            return candidate;
+    }
+    return {};
+}
+#endif
+
+const wchar_t* dlssModeText(DlssQualityMode mode)
+{
+    switch(mode)
+    {
+    case DlssQualityMode::Quality:
+        return L"Quality (highest)";
+    case DlssQualityMode::Balanced:
+        return L"Balanced";
+    case DlssQualityMode::Performance:
+        return L"Performance";
+    case DlssQualityMode::UltraPerformance:
+        return L"Ultra Performance";
+    }
+    return L"Quality (highest)";
+}
+
+float defaultRenderScaleForDlssMode(DlssQualityMode mode)
+{
+    switch(mode)
+    {
+    case DlssQualityMode::Quality:
+        return 0.6667f;
+    case DlssQualityMode::Balanced:
+        return 0.5833f;
+    case DlssQualityMode::Performance:
+        return 0.5000f;
+    case DlssQualityMode::UltraPerformance:
+        return 0.3333f;
+    }
+    return 0.6667f;
+}
+
+#ifdef BLACKHOLE_HAS_STREAMLINE
+sl::DLSSMode toStreamlineDlssMode(DlssQualityMode mode)
+{
+    switch(mode)
+    {
+    case DlssQualityMode::Quality:
+        return sl::DLSSMode::eMaxQuality;
+    case DlssQualityMode::Balanced:
+        return sl::DLSSMode::eBalanced;
+    case DlssQualityMode::Performance:
+        return sl::DLSSMode::eMaxPerformance;
+    case DlssQualityMode::UltraPerformance:
+        return sl::DLSSMode::eUltraPerformance;
+    }
+    return sl::DLSSMode::eMaxQuality;
+}
+#endif
 
 void throwIfFailed(HRESULT result, const char* operation)
 {
@@ -207,6 +328,8 @@ D3D12Engine::~D3D12Engine()
         }
     }
 
+    shutdownStreamline();
+
     if(objectBuffer != nullptr && objectBufferMapped != nullptr)
         objectBuffer->Unmap(0, nullptr);
     objectBufferMapped = nullptr;
@@ -223,6 +346,720 @@ D3D12Engine::~D3D12Engine()
 
     if(instance != nullptr)
         UnregisterClassW(L"BlackHoleD3D12Window", instance);
+
+    if(uiFont != nullptr)
+        DeleteObject(uiFont);
+    uiFont = nullptr;
+    if(uiHeadingFont != nullptr)
+        DeleteObject(uiHeadingFont);
+    uiHeadingFont = nullptr;
+    if(qualityPanelBrush != nullptr)
+        DeleteObject(qualityPanelBrush);
+    qualityPanelBrush = nullptr;
+}
+
+void D3D12Engine::createQualityPanel()
+{
+    INITCOMMONCONTROLSEX commonControls{};
+    commonControls.dwSize = sizeof(commonControls);
+    commonControls.dwICC = ICC_BAR_CLASSES;
+    InitCommonControlsEx(&commonControls);
+
+    uiFont = CreateFontW(
+        -14,
+        0,
+        0,
+        0,
+        FW_NORMAL,
+        FALSE,
+        FALSE,
+        FALSE,
+        DEFAULT_CHARSET,
+        OUT_DEFAULT_PRECIS,
+        CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY,
+        DEFAULT_PITCH | FF_SWISS,
+        L"Segoe UI");
+    uiHeadingFont = CreateFontW(
+        -16,
+        0,
+        0,
+        0,
+        FW_BOLD,
+        FALSE,
+        FALSE,
+        FALSE,
+        DEFAULT_CHARSET,
+        OUT_DEFAULT_PRECIS,
+        CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY,
+        DEFAULT_PITCH | FF_SWISS,
+        L"Segoe UI");
+    qualityPanelBrush = CreateSolidBrush(RGB(15, 19, 27));
+
+    qualityPanel = CreateWindowExW(
+        WS_EX_CLIENTEDGE,
+        L"STATIC",
+        L"",
+        WS_CHILD | WS_VISIBLE,
+        0,
+        0,
+        0,
+        0,
+        windowHandle,
+        nullptr,
+        instance,
+        nullptr);
+
+    if(qualityPanel == nullptr)
+        throw std::runtime_error("Create quality panel failed");
+
+    auto makeControl = [this](
+                           LPCWSTR className,
+                           LPCWSTR text,
+                           DWORD style,
+                           int controlId)
+    {
+        HWND control = CreateWindowExW(
+            0,
+            className,
+            text,
+            style,
+            0,
+            0,
+            0,
+            0,
+            windowHandle,
+            reinterpret_cast<HMENU>(static_cast<INT_PTR>(controlId)),
+            instance,
+            nullptr);
+        if(control == nullptr)
+            throw std::runtime_error("Create quality control failed");
+        if(uiFont != nullptr)
+            SendMessageW(
+                control,
+                WM_SETFONT,
+                reinterpret_cast<WPARAM>(uiFont),
+                TRUE);
+        qualityControls.push_back(control);
+        return control;
+    };
+
+    fpsLabel = makeControl(
+        L"STATIC",
+        L"FPS  --",
+        WS_CHILD | WS_VISIBLE | SS_LEFT,
+        0);
+    if(uiHeadingFont != nullptr)
+        SendMessageW(
+            fpsLabel,
+            WM_SETFONT,
+            reinterpret_cast<WPARAM>(uiHeadingFont),
+            TRUE);
+
+    qualityHeader = makeControl(
+        L"STATIC",
+        L"IMAGE QUALITY",
+        WS_CHILD | WS_VISIBLE | SS_LEFT,
+        0);
+    if(uiHeadingFont != nullptr)
+        SendMessageW(
+            qualityHeader,
+            WM_SETFONT,
+            reinterpret_cast<WPARAM>(uiHeadingFont),
+            TRUE);
+    qualityHint = makeControl(
+        L"STATIC",
+        L"Live controls - changes apply immediately",
+        WS_CHILD | WS_VISIBLE | SS_LEFT,
+        0);
+
+    renderGroup = makeControl(
+        L"BUTTON",
+        L"Ray tracing / internal resolution",
+        WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
+        0);
+    rayTracingCheck = makeControl(
+        L"BUTTON",
+        L"Ray tracing (full black-hole effect)",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+        IDC_QUALITY_RAYTRACE);
+    renderScaleLabel = makeControl(
+        L"STATIC",
+        L"Render scale",
+        WS_CHILD | WS_VISIBLE | SS_LEFT,
+        0);
+    renderScaleTrack = makeControl(
+        TRACKBAR_CLASSW,
+        L"",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | TBS_AUTOTICKS | TBS_HORZ,
+        IDC_QUALITY_SCALE);
+    renderScaleValue = makeControl(
+        L"STATIC",
+        L"",
+        WS_CHILD | WS_VISIBLE | SS_LEFT,
+        0);
+    rayStepsLabel = makeControl(
+        L"STATIC",
+        L"Ray integration steps",
+        WS_CHILD | WS_VISIBLE | SS_LEFT,
+        0);
+    rayStepsTrack = makeControl(
+        TRACKBAR_CLASSW,
+        L"",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | TBS_AUTOTICKS | TBS_HORZ,
+        IDC_QUALITY_STEPS);
+    rayStepsValue = makeControl(
+        L"STATIC",
+        L"",
+        WS_CHILD | WS_VISIBLE | SS_LEFT,
+        0);
+
+    upscaleGroup = makeControl(
+        L"BUTTON",
+        L"Super resolution",
+        WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
+        0);
+    dlssCheck = makeControl(
+        L"BUTTON",
+        L"NVIDIA DLSS Super Resolution",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+        IDC_QUALITY_DLSS);
+    dlssModeLabel = makeControl(
+        L"STATIC",
+        L"DLSS mode",
+        WS_CHILD | WS_VISIBLE | SS_LEFT,
+        0);
+    dlssModeCombo = makeControl(
+        L"COMBOBOX",
+        L"",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP |
+            CBS_DROPDOWNLIST | CBS_NOINTEGRALHEIGHT | WS_VSCROLL,
+        IDC_QUALITY_DLSS_MODE);
+    SendMessageW(
+        dlssModeCombo,
+        CB_ADDSTRING,
+        0,
+        reinterpret_cast<LPARAM>(L"Quality (highest)"));
+    SendMessageW(
+        dlssModeCombo,
+        CB_ADDSTRING,
+        0,
+        reinterpret_cast<LPARAM>(L"Balanced"));
+    SendMessageW(
+        dlssModeCombo,
+        CB_ADDSTRING,
+        0,
+        reinterpret_cast<LPARAM>(L"Performance"));
+    SendMessageW(
+        dlssModeCombo,
+        CB_ADDSTRING,
+        0,
+        reinterpret_cast<LPARAM>(L"Ultra Performance"));
+    dlssStatus = makeControl(
+        L"STATIC",
+        L"DLSS status: checking runtime...",
+        WS_CHILD | WS_VISIBLE | SS_LEFT,
+        0);
+
+    accumulationGroup = makeControl(
+        L"BUTTON",
+        L"Temporal reconstruction",
+        WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
+        0);
+    taaLabel = makeControl(
+        L"STATIC",
+        L"Ray accumulation samples",
+        WS_CHILD | WS_VISIBLE | SS_LEFT,
+        0);
+    taaCombo = makeControl(
+        L"COMBOBOX",
+        L"",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP |
+            CBS_DROPDOWNLIST | CBS_NOINTEGRALHEIGHT | WS_VSCROLL,
+        IDC_QUALITY_TAA);
+    const wchar_t* taaOptions[] =
+    {
+        L"1 sample (fast)",
+        L"2 samples",
+        L"4 samples",
+        L"8 samples",
+        L"16 samples",
+        L"Unlimited"
+    };
+    for(const wchar_t* option : taaOptions)
+        SendMessageW(
+            taaCombo,
+            CB_ADDSTRING,
+            0,
+            reinterpret_cast<LPARAM>(option));
+    vsyncCheck = makeControl(
+        L"BUTTON",
+        L"VSync (display-paced)",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+        IDC_QUALITY_VSYNC);
+
+    statusLabel = makeControl(
+        L"STATIC",
+        L"",
+        WS_CHILD | WS_VISIBLE | SS_LEFT,
+        0);
+    outputLabel = makeControl(
+        L"STATIC",
+        L"",
+        WS_CHILD | WS_VISIBLE | SS_LEFT,
+        0);
+    resetButton = makeControl(
+        L"BUTTON",
+        L"Reset quality defaults",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+        IDC_QUALITY_RESET);
+
+    SendMessageW(
+        renderScaleTrack,
+        TBM_SETRANGE,
+        TRUE,
+        MAKELONG(25, 100));
+    SendMessageW(renderScaleTrack, TBM_SETTICFREQ, 5, 0);
+    SendMessageW(
+        rayStepsTrack,
+        TBM_SETRANGE,
+        TRUE,
+        MAKELONG(512, 16384));
+    SendMessageW(rayStepsTrack, TBM_SETTICFREQ, 2048, 0);
+
+    layoutQualityPanel();
+    updateQualityPanel();
+}
+
+void D3D12Engine::layoutQualityPanel()
+{
+    if(windowHandle == nullptr)
+        return;
+
+    RECT clientRect{};
+    GetClientRect(windowHandle, &clientRect);
+    const int clientWidth = std::max<int>(clientRect.right, 1);
+    const int clientHeight = std::max<int>(clientRect.bottom, 1);
+    const int panelWidth = std::min(QUALITY_PANEL_WIDTH, clientWidth);
+    const int panelX = clientWidth - panelWidth;
+    const int left = panelX + 16;
+    const int contentWidth = std::max(panelWidth - 32, 120);
+    const int valueWidth = 72;
+    const int trackWidth = std::max(contentWidth - valueWidth - 8, 80);
+
+    MoveWindow(qualityPanel, panelX, 0, panelWidth, clientHeight, TRUE);
+    MoveWindow(fpsLabel, 12, 10, 180, 28, TRUE);
+    MoveWindow(qualityHeader, left, 12, contentWidth, 24, TRUE);
+    MoveWindow(qualityHint, left, 36, contentWidth, 20, TRUE);
+
+    MoveWindow(renderGroup, left, 62, contentWidth, 178, TRUE);
+    MoveWindow(rayTracingCheck, left + 12, 84, contentWidth - 24, 22, TRUE);
+    MoveWindow(renderScaleLabel, left + 12, 113, contentWidth - 24, 18, TRUE);
+    MoveWindow(renderScaleTrack, left + 12, 132, trackWidth, 28, TRUE);
+    MoveWindow(renderScaleValue, left + 12 + trackWidth + 8, 136, valueWidth, 22, TRUE);
+    MoveWindow(rayStepsLabel, left + 12, 166, contentWidth - 24, 18, TRUE);
+    MoveWindow(rayStepsTrack, left + 12, 185, trackWidth, 28, TRUE);
+    MoveWindow(rayStepsValue, left + 12 + trackWidth + 8, 189, valueWidth, 22, TRUE);
+
+    MoveWindow(upscaleGroup, left, 248, contentWidth, 118, TRUE);
+    MoveWindow(dlssCheck, left + 12, 270, contentWidth - 24, 22, TRUE);
+    MoveWindow(dlssModeLabel, left + 12, 298, 80, 18, TRUE);
+    MoveWindow(dlssModeCombo, left + 94, 294, contentWidth - 106, 24, TRUE);
+    MoveWindow(dlssStatus, left + 12, 329, contentWidth - 24, 28, TRUE);
+
+    MoveWindow(accumulationGroup, left, 374, contentWidth, 103, TRUE);
+    MoveWindow(taaLabel, left + 12, 396, 145, 18, TRUE);
+    MoveWindow(taaCombo, left + 160, 392, contentWidth - 172, 24, TRUE);
+    MoveWindow(vsyncCheck, left + 12, 431, contentWidth - 24, 22, TRUE);
+
+    MoveWindow(statusLabel, left, 486, contentWidth, 20, TRUE);
+    MoveWindow(outputLabel, left, 508, contentWidth, 20, TRUE);
+    MoveWindow(resetButton, left, clientHeight - 42, contentWidth, 28, TRUE);
+}
+
+void D3D12Engine::updateQualityFps(double fps)
+{
+    if(fpsLabel == nullptr)
+        return;
+
+    std::wostringstream text;
+    text << L"FPS  " << std::fixed << std::setprecision(1) << fps;
+    SetWindowTextW(fpsLabel, text.str().c_str());
+}
+
+void D3D12Engine::updateFps(double fps)
+{
+    updateQualityFps(fps);
+}
+
+void D3D12Engine::updateQualityPanel()
+{
+    if(qualityPanel == nullptr)
+        return;
+
+    SendMessageW(
+        rayTracingCheck,
+        BM_SETCHECK,
+        settings.rayTracing ? BST_CHECKED : BST_UNCHECKED,
+        0);
+    SendMessageW(
+        dlssCheck,
+        BM_SETCHECK,
+        settings.dlss ? BST_CHECKED : BST_UNCHECKED,
+        0);
+    SendMessageW(
+        vsyncCheck,
+        BM_SETCHECK,
+        settings.vsync ? BST_CHECKED : BST_UNCHECKED,
+        0);
+
+    const int scalePercent = std::clamp(
+        static_cast<int>(std::lround(
+            100.0 * static_cast<double>(RENDER_WIDTH) /
+            static_cast<double>(std::max(WIDTH, 1)))),
+        25,
+        100);
+    SendMessageW(renderScaleTrack, TBM_SETPOS, TRUE, scalePercent);
+    SendMessageW(
+        rayStepsTrack,
+        TBM_SETPOS,
+        TRUE,
+        std::clamp<int>(settings.maxSteps, 512, 16384));
+    SendMessageW(
+        dlssModeCombo,
+        CB_SETCURSEL,
+        static_cast<int>(settings.dlssMode),
+        0);
+
+    int taaSelection = 0;
+    switch(settings.temporalSampleLimit)
+    {
+    case 2:
+        taaSelection = 1;
+        break;
+    case 4:
+        taaSelection = 2;
+        break;
+    case 8:
+        taaSelection = 3;
+        break;
+    case 16:
+        taaSelection = 4;
+        break;
+    case 0:
+        taaSelection = 5;
+        break;
+    default:
+        taaSelection = 0;
+        break;
+    }
+    SendMessageW(taaCombo, CB_SETCURSEL, taaSelection, 0);
+
+    EnableWindow(dlssCheck, dlssActive ? TRUE : FALSE);
+    EnableWindow(dlssModeCombo, dlssActive ? TRUE : FALSE);
+
+    std::wostringstream scaleText;
+    scaleText << std::fixed << std::setprecision(1)
+              << (100.0 * static_cast<double>(RENDER_WIDTH) /
+                  static_cast<double>(std::max(WIDTH, 1)))
+              << L"%  " << RENDER_WIDTH << L"x" << RENDER_HEIGHT;
+    SetWindowTextW(renderScaleValue, scaleText.str().c_str());
+
+    std::wostringstream stepsText;
+    stepsText << settings.maxSteps << L" steps";
+    SetWindowTextW(rayStepsValue, stepsText.str().c_str());
+
+    if(dlssActive)
+    {
+        std::wstring text = L"DLSS active | ";
+        text += dlssModeText(settings.dlssMode);
+        text += L" | preset K";
+        SetWindowTextW(dlssStatus, text.c_str());
+    }
+    else
+    {
+        SetWindowTextW(
+            dlssStatus,
+            settings.dlss
+                ? L"DLSS unavailable | native compositor fallback"
+                : L"DLSS disabled | native compositor fallback");
+    }
+
+    SetWindowTextW(
+        statusLabel,
+        settings.rayTracing
+            ? L"Ray tracing: ON | frame pacing: unlimited"
+            : L"Ray tracing: OFF | frame pacing: unlimited");
+
+    std::wostringstream outputText;
+    outputText << L"Output: " << WIDTH << L"x" << HEIGHT
+               << L" | API: Direct3D 12";
+    SetWindowTextW(outputLabel, outputText.str().c_str());
+}
+
+void D3D12Engine::toggleQualityPanel()
+{
+    qualityPanelVisible = !qualityPanelVisible;
+    const int visibility = qualityPanelVisible ? SW_SHOW : SW_HIDE;
+    ShowWindow(qualityPanel, visibility);
+    for(HWND control : qualityControls)
+    {
+        if(control != fpsLabel)
+            ShowWindow(control, visibility);
+    }
+    ShowWindow(fpsLabel, SW_SHOW);
+}
+
+void D3D12Engine::resetAccumulation()
+{
+    accumulatedSampleCount = 0;
+    hasPreviousCamera = false;
+    currentJitterX = 0.0f;
+    currentJitterY = 0.0f;
+}
+
+void D3D12Engine::recreateRayResources(int renderWidth, int renderHeight)
+{
+    renderWidth = std::clamp(renderWidth, 64, 8192);
+    renderHeight = std::clamp(renderHeight, 64, 8192);
+    if(renderWidth == RENDER_WIDTH && renderHeight == RENDER_HEIGHT)
+    {
+        resetAccumulation();
+        updateQualityPanel();
+        return;
+    }
+
+    waitForGpu();
+    if(objectBuffer != nullptr && objectBufferMapped != nullptr)
+        objectBuffer->Unmap(0, nullptr);
+    objectBufferMapped = nullptr;
+
+    outputTexture.Reset();
+    materialTexture.Reset();
+    accumulationBuffer.Reset();
+    materialAccumulationBuffer.Reset();
+    objectBuffer.Reset();
+#ifdef BLACKHOLE_HAS_STREAMLINE
+    dlssOutputTexture.Reset();
+    dlssDepthTexture.Reset();
+    dlssMotionVectorTexture.Reset();
+#endif
+
+    RENDER_WIDTH = renderWidth;
+    RENDER_HEIGHT = renderHeight;
+    settings.renderWidth = renderWidth;
+    settings.renderHeight = renderHeight;
+    settings.renderScale = static_cast<float>(renderWidth) /
+                           static_cast<float>(std::max(WIDTH, 1));
+    outputTextureState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    materialTextureState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    dlssOutputTextureState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    dlssDepthTextureState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    dlssMotionVectorTextureState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+
+    createRayResources();
+    clearInitialResources();
+    resetAccumulation();
+    updateQualityPanel();
+}
+
+void D3D12Engine::applyRenderScale(int percent)
+{
+    percent = std::clamp(percent, 25, 100);
+    const float scale = static_cast<float>(percent) / 100.0f;
+    const int renderWidth = std::clamp(
+        static_cast<int>(std::lround(static_cast<float>(WIDTH) * scale)),
+        64,
+        8192);
+    const int renderHeight = std::clamp(
+        static_cast<int>(std::lround(static_cast<float>(HEIGHT) * scale)),
+        64,
+        8192);
+    settings.renderScale = scale;
+    recreateRayResources(renderWidth, renderHeight);
+}
+
+void D3D12Engine::applyRaySteps(int steps)
+{
+    settings.maxSteps = static_cast<std::uint32_t>(
+        std::clamp(steps, 512, 16384));
+    resetAccumulation();
+    updateQualityPanel();
+}
+
+void D3D12Engine::applyTemporalSamples(int selection)
+{
+    static constexpr std::uint32_t samples[] = {1, 2, 4, 8, 16, 0};
+    selection = std::clamp(selection, 0, 5);
+    settings.temporalSampleLimit = samples[selection];
+    resetAccumulation();
+    updateQualityPanel();
+}
+
+void D3D12Engine::applyDlssMode(int selection)
+{
+    selection = std::clamp(selection, 0, 3);
+    const DlssQualityMode previousMode = settings.dlssMode;
+    settings.dlssMode = static_cast<DlssQualityMode>(selection);
+
+#ifdef BLACKHOLE_HAS_STREAMLINE
+    if(dlssActive && dlssSetOptions != nullptr)
+    {
+        const sl::DLSSOptions previousOptions = dlssOptions;
+        dlssOptions.mode = toStreamlineDlssMode(settings.dlssMode);
+        waitForGpu();
+        const sl::Result result = dlssSetOptions(dlssViewport, dlssOptions);
+        if(result != sl::Result::eOk)
+        {
+            dlssOptions = previousOptions;
+            settings.dlssMode = previousMode;
+            std::cerr << "DLSS mode change was rejected (code "
+                      << static_cast<int>(result) << ")\n";
+            updateQualityPanel();
+            return;
+        }
+
+        int renderWidth = static_cast<int>(std::lround(
+            static_cast<float>(WIDTH) *
+            defaultRenderScaleForDlssMode(settings.dlssMode)));
+        int renderHeight = static_cast<int>(std::lround(
+            static_cast<float>(HEIGHT) *
+            defaultRenderScaleForDlssMode(settings.dlssMode)));
+        sl::DLSSOptimalSettings optimal{};
+        if(dlssGetOptimalSettings != nullptr &&
+           dlssGetOptimalSettings(dlssOptions, optimal) == sl::Result::eOk &&
+           optimal.optimalRenderWidth > 0 && optimal.optimalRenderHeight > 0)
+        {
+            renderWidth = static_cast<int>(optimal.optimalRenderWidth);
+            renderHeight = static_cast<int>(optimal.optimalRenderHeight);
+        }
+        recreateRayResources(renderWidth, renderHeight);
+        return;
+    }
+#endif
+
+    resetAccumulation();
+    updateQualityPanel();
+}
+
+void D3D12Engine::resetQualityDefaults()
+{
+    settings.rayTracing = DEFAULT_RAYTRACING;
+    settings.dlss = DEFAULT_DLSS;
+    settings.dlssMode = DlssQualityMode::Quality;
+    settings.maxSteps = DEFAULT_MAX_STEPS;
+    settings.temporalSampleLimit = DEFAULT_TEMPORAL_SAMPLE_LIMIT;
+    settings.vsync = false;
+
+    applyDlssMode(static_cast<int>(DlssQualityMode::Quality));
+    if(!dlssActive)
+        recreateRayResources(DEFAULT_RENDER_WIDTH, DEFAULT_RENDER_HEIGHT);
+    resetAccumulation();
+    updateQualityPanel();
+}
+
+void D3D12Engine::handleQualityCommand(WPARAM wParam, LPARAM lParam)
+{
+    const int controlId = static_cast<int>(LOWORD(wParam));
+    const int notification = static_cast<int>(HIWORD(wParam));
+    if(notification != BN_CLICKED &&
+       !(controlId == IDC_QUALITY_TAA ||
+         controlId == IDC_QUALITY_DLSS_MODE))
+        return;
+
+    switch(controlId)
+    {
+    case IDC_QUALITY_RAYTRACE:
+        settings.rayTracing = SendMessageW(
+            rayTracingCheck,
+            BM_GETCHECK,
+            0,
+            0) == BST_CHECKED;
+        resetAccumulation();
+        updateQualityPanel();
+        break;
+
+    case IDC_QUALITY_DLSS:
+        settings.dlss = SendMessageW(
+            dlssCheck,
+            BM_GETCHECK,
+            0,
+            0) == BST_CHECKED;
+        resetAccumulation();
+        updateQualityPanel();
+        break;
+
+    case IDC_QUALITY_VSYNC:
+        settings.vsync = SendMessageW(
+            vsyncCheck,
+            BM_GETCHECK,
+            0,
+            0) == BST_CHECKED;
+        break;
+
+    case IDC_QUALITY_DLSS_MODE:
+        if(notification == CBN_SELCHANGE)
+            applyDlssMode(static_cast<int>(SendMessageW(
+                dlssModeCombo,
+                CB_GETCURSEL,
+                0,
+                0)));
+        break;
+
+    case IDC_QUALITY_TAA:
+        if(notification == CBN_SELCHANGE)
+            applyTemporalSamples(static_cast<int>(SendMessageW(
+                taaCombo,
+                CB_GETCURSEL,
+                0,
+                0)));
+        break;
+
+    case IDC_QUALITY_RESET:
+        resetQualityDefaults();
+        break;
+
+    default:
+        break;
+    }
+
+    (void)lParam;
+}
+
+void D3D12Engine::handleQualityScroll(WPARAM wParam, LPARAM lParam)
+{
+    HWND control = reinterpret_cast<HWND>(lParam);
+    const int notification = static_cast<int>(LOWORD(wParam));
+    if(control == renderScaleTrack)
+    {
+        const int position = static_cast<int>(SendMessageW(
+            renderScaleTrack,
+            TBM_GETPOS,
+            0,
+            0));
+        const int previewWidth = static_cast<int>(std::lround(
+            static_cast<float>(WIDTH) * position / 100.0f));
+        const int previewHeight = static_cast<int>(std::lround(
+            static_cast<float>(HEIGHT) * position / 100.0f));
+        std::wostringstream text;
+        text << position << L"%  " << previewWidth << L"x" << previewHeight;
+        SetWindowTextW(renderScaleValue, text.str().c_str());
+        if(notification != TB_THUMBTRACK)
+            applyRenderScale(position);
+    }
+    else if(control == rayStepsTrack)
+    {
+        const int position = static_cast<int>(SendMessageW(
+            rayStepsTrack,
+            TBM_GETPOS,
+            0,
+            0));
+        std::wstring text = std::to_wstring(position) + L" steps";
+        SetWindowTextW(rayStepsValue, text.c_str());
+        if(notification != TB_THUMBTRACK)
+            applyRaySteps(position);
+    }
 }
 
 void D3D12Engine::createWindow()
@@ -266,12 +1103,17 @@ void D3D12Engine::createWindow()
     if(windowHandle == nullptr)
         throw std::runtime_error("CreateWindowExW failed");
 
+    createQualityPanel();
     ShowWindow(windowHandle, SW_SHOW);
     UpdateWindow(windowHandle);
 }
 
 void D3D12Engine::initializeD3D12()
 {
+    // Streamline must be initialized before the first DXGI/D3D call. It is
+    // optional at runtime; the renderer falls back cleanly when its DLLs are
+    // absent or the GPU/driver does not support DLSS.
+    initializeStreamline();
     createDeviceAndQueue();
     createCommandObjects();
     createSwapChain();
@@ -282,6 +1124,246 @@ void D3D12Engine::initializeD3D12()
     createGridGeometry();
     createPipelines();
     clearInitialResources();
+    updateQualityPanel();
+}
+
+void D3D12Engine::initializeStreamline()
+{
+#ifdef BLACKHOLE_HAS_STREAMLINE
+    if(!settings.dlss)
+        return;
+
+    streamlineRuntimeDirectory = findStreamlineRuntimeDirectory(
+        shaderDirectory);
+    if(streamlineRuntimeDirectory.empty())
+    {
+        std::cerr << "DLSS runtime not found; using native compositor fallback.\n";
+        return;
+    }
+
+    const std::filesystem::path interposerPath =
+        streamlineRuntimeDirectory / "sl.interposer.dll";
+    streamline.module = LoadLibraryW(interposerPath.c_str());
+    if(streamline.module == nullptr)
+    {
+        std::cerr << "Unable to load " << interposerPath.string()
+                  << "; using native compositor fallback.\n";
+        return;
+    }
+
+    streamline.init = loadStreamlineFunction<StreamlineApi::Init>(
+        streamline.module,
+        "slInit");
+    streamline.shutdown = loadStreamlineFunction<StreamlineApi::Shutdown>(
+        streamline.module,
+        "slShutdown");
+    streamline.setD3DDevice =
+        loadStreamlineFunction<StreamlineApi::SetD3DDevice>(
+            streamline.module,
+            "slSetD3DDevice");
+    streamline.getFeatureFunction =
+        loadStreamlineFunction<StreamlineApi::GetFeatureFunction>(
+            streamline.module,
+            "slGetFeatureFunction");
+    streamline.setConstants =
+        loadStreamlineFunction<StreamlineApi::SetConstants>(
+            streamline.module,
+            "slSetConstants");
+    streamline.evaluateFeature =
+        loadStreamlineFunction<StreamlineApi::EvaluateFeature>(
+            streamline.module,
+            "slEvaluateFeature");
+    streamline.getNewFrameToken =
+        loadStreamlineFunction<StreamlineApi::GetNewFrameToken>(
+            streamline.module,
+            "slGetNewFrameToken");
+    streamline.upgradeInterface =
+        loadStreamlineFunction<StreamlineApi::UpgradeInterface>(
+            streamline.module,
+            "slUpgradeInterface");
+
+    if(streamline.init == nullptr || streamline.shutdown == nullptr ||
+       streamline.setD3DDevice == nullptr ||
+       streamline.getFeatureFunction == nullptr ||
+       streamline.setConstants == nullptr ||
+       streamline.evaluateFeature == nullptr ||
+       streamline.getNewFrameToken == nullptr ||
+       streamline.upgradeInterface == nullptr)
+    {
+        std::cerr << "Streamline core exports are incomplete; using native "
+                     "compositor fallback.\n";
+        shutdownStreamline();
+        return;
+    }
+
+    std::error_code directoryError;
+    streamlineLogDirectory = streamlineRuntimeDirectory / "logs";
+    std::filesystem::create_directories(
+        streamlineLogDirectory,
+        directoryError);
+
+    const sl::Feature featuresToLoad[] = {sl::kFeatureDLSS};
+    const wchar_t* pluginPath = streamlineRuntimeDirectory.c_str();
+    static constexpr char PROJECT_ID[] =
+        "3e7853c7-6a2b-4b3c-97b0-3e2bb261b3b1";
+    static constexpr char ENGINE_VERSION[] = "BlackHole-D3D12-1.0";
+
+    sl::Preferences preferences{};
+    preferences.showConsole = false;
+    preferences.logLevel = sl::LogLevel::eDefault;
+    preferences.pathsToPlugins = &pluginPath;
+    preferences.numPathsToPlugins = 1;
+    preferences.pathToLogsAndData = streamlineLogDirectory.c_str();
+    preferences.logMessageCallback = &streamlineLogMessage;
+    preferences.flags =
+        sl::PreferenceFlags::eDisableCLStateTracking |
+        sl::PreferenceFlags::eUseManualHooking |
+        sl::PreferenceFlags::eUseFrameBasedResourceTagging;
+    preferences.featuresToLoad = featuresToLoad;
+    preferences.numFeaturesToLoad = 1;
+    preferences.engine = sl::EngineType::eCustom;
+    preferences.engineVersion = ENGINE_VERSION;
+    preferences.projectId = PROJECT_ID;
+    preferences.renderAPI = sl::RenderAPI::eD3D12;
+
+    const sl::Result result = streamline.init(preferences, sl::kSDKVersion);
+    if(result != sl::Result::eOk)
+    {
+        std::cerr << "Streamline initialization failed (code "
+                  << static_cast<int>(result)
+                  << "); using native compositor fallback.\n";
+        shutdownStreamline();
+        return;
+    }
+
+    streamlineInitialized = true;
+    std::cout << "Streamline: initialized for DLSS Quality\n";
+#else
+    // This build was configured without the optional Streamline headers.
+#endif
+}
+
+void D3D12Engine::connectStreamlineDevice()
+{
+#ifdef BLACKHOLE_HAS_STREAMLINE
+    if(!streamlineInitialized)
+        return;
+
+    sl::Result result = streamline.setD3DDevice(device.Get());
+    if(result != sl::Result::eOk)
+    {
+        std::cerr << "Streamline could not attach to the D3D12 device (code "
+                  << static_cast<int>(result)
+                  << "); using native compositor fallback.\n";
+        shutdownStreamline();
+        return;
+    }
+
+    auto getFeatureFunction = [this](const char* name) -> void*
+    {
+        void* function = nullptr;
+        if(streamline.getFeatureFunction(
+               sl::kFeatureDLSS,
+               name,
+               function) != sl::Result::eOk)
+            return nullptr;
+        return function;
+    };
+
+    dlssSetOptions = reinterpret_cast<PFun_slDLSSSetOptions*>(
+        getFeatureFunction("slDLSSSetOptions"));
+    dlssGetOptimalSettings =
+        reinterpret_cast<PFun_slDLSSGetOptimalSettings*>(
+            getFeatureFunction("slDLSSGetOptimalSettings"));
+    if(dlssSetOptions == nullptr || dlssGetOptimalSettings == nullptr)
+    {
+        std::cerr << "Streamline DLSS plugin exports are unavailable; using "
+                     "native compositor fallback.\n";
+        shutdownStreamline();
+        return;
+    }
+
+    dlssOptions = sl::DLSSOptions{};
+    dlssOptions.mode = toStreamlineDlssMode(settings.dlssMode);
+    dlssOptions.outputWidth = static_cast<std::uint32_t>(WIDTH);
+    dlssOptions.outputHeight = static_cast<std::uint32_t>(HEIGHT);
+    dlssOptions.colorBuffersHDR = sl::eFalse;
+    dlssOptions.useAutoExposure = sl::eTrue;
+    dlssOptions.alphaUpscalingEnabled = sl::eFalse;
+    dlssOptions.qualityPreset = sl::DLSSPreset::ePresetK;
+    dlssOptions.balancedPreset = sl::DLSSPreset::ePresetK;
+    dlssOptions.performancePreset = sl::DLSSPreset::ePresetK;
+    dlssOptions.ultraPerformancePreset = sl::DLSSPreset::ePresetK;
+    dlssOptions.dlaaPreset = sl::DLSSPreset::ePresetK;
+
+    result = dlssSetOptions(dlssViewport, dlssOptions);
+    if(result != sl::Result::eOk)
+    {
+        std::cerr << "DLSS options were rejected (code "
+                  << static_cast<int>(result)
+                  << "); using native compositor fallback.\n";
+        shutdownStreamline();
+        return;
+    }
+
+    sl::DLSSOptimalSettings optimalSettings{};
+    result = dlssGetOptimalSettings(dlssOptions, optimalSettings);
+    if(result == sl::Result::eOk)
+    {
+        std::cout << "DLSS Quality source recommendation: "
+                  << optimalSettings.optimalRenderWidth << " x "
+                  << optimalSettings.optimalRenderHeight << "\n";
+    }
+    else
+    {
+        std::cerr << "DLSS optimal-resolution query failed (code "
+                  << static_cast<int>(result)
+                  << "); continuing with configured render resolution.\n";
+    }
+
+    dlssActive = true;
+    std::wcout << L"DLSS: enabled (" << dlssModeText(settings.dlssMode)
+               << L", preset K)\n";
+#else
+    (void)device;
+#endif
+}
+
+void D3D12Engine::shutdownStreamline()
+{
+#ifdef BLACKHOLE_HAS_STREAMLINE
+    if(streamlineDeviceProxy != nullptr && streamlineDeviceProxy != device.Get())
+        streamlineDeviceProxy->Release();
+    streamlineDeviceProxy = nullptr;
+    if(streamlineFactoryProxy != nullptr && streamlineFactoryProxy != factory.Get())
+        streamlineFactoryProxy->Release();
+    streamlineFactoryProxy = nullptr;
+
+    dlssActive = false;
+    dlssFrameToken = nullptr;
+    dlssSetOptions = nullptr;
+    dlssGetOptimalSettings = nullptr;
+
+    if(streamlineInitialized && streamline.shutdown != nullptr)
+        streamline.shutdown();
+    streamlineInitialized = false;
+
+    if(streamline.module != nullptr)
+    {
+        FreeLibrary(streamline.module);
+        streamline.module = nullptr;
+    }
+
+    streamline.init = nullptr;
+    streamline.shutdown = nullptr;
+    streamline.setD3DDevice = nullptr;
+    streamline.getFeatureFunction = nullptr;
+    streamline.setConstants = nullptr;
+    streamline.evaluateFeature = nullptr;
+    streamline.getNewFrameToken = nullptr;
+    streamline.upgradeInterface = nullptr;
+
+#endif
 }
 
 void D3D12Engine::createDeviceAndQueue()
@@ -342,16 +1424,62 @@ void D3D12Engine::createDeviceAndQueue()
         "D3D12CreateDevice");
     std::wcout << L"D3D12 GPU: " << selectedDescription.Description << L"\n";
 
+#ifdef BLACKHOLE_HAS_STREAMLINE
+    // The device must be registered before any manual hook is activated. In
+    // particular, this must precede upgrading the device/factory proxies.
+    if(streamlineInitialized)
+        connectStreamlineDevice();
+
+    if(streamlineInitialized && streamline.upgradeInterface != nullptr)
+    {
+        streamlineFactoryProxy = factory.Get();
+        const sl::Result result = streamline.upgradeInterface(
+            reinterpret_cast<void**>(&streamlineFactoryProxy));
+        if(result != sl::Result::eOk || streamlineFactoryProxy == nullptr)
+        {
+            std::cerr << "Streamline could not upgrade the DXGI factory (code "
+                      << static_cast<int>(result)
+                      << "); using native compositor fallback.\n";
+            streamlineFactoryProxy = nullptr;
+            shutdownStreamline();
+        }
+    }
+
+    ID3D12Device* queueDevice = device.Get();
+    if(streamlineInitialized && streamline.upgradeInterface != nullptr)
+    {
+        streamlineDeviceProxy = queueDevice;
+        const sl::Result result = streamline.upgradeInterface(
+            reinterpret_cast<void**>(&streamlineDeviceProxy));
+        if(result != sl::Result::eOk || streamlineDeviceProxy == nullptr)
+        {
+            std::cerr << "Streamline could not upgrade the D3D12 device (code "
+                      << static_cast<int>(result)
+                      << "); using native compositor fallback.\n";
+            streamlineDeviceProxy = nullptr;
+            shutdownStreamline();
+        }
+        else
+        {
+            queueDevice = streamlineDeviceProxy;
+        }
+    }
+#else
+    ID3D12Device* queueDevice = device.Get();
+#endif
+
     D3D12_COMMAND_QUEUE_DESC queueDescription{};
     queueDescription.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
     queueDescription.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
     queueDescription.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
     queueDescription.NodeMask = 0;
-    throwIfFailed(
-        device->CreateCommandQueue(
+    const HRESULT queueResult = queueDevice->CreateCommandQueue(
             &queueDescription,
-            IID_PPV_ARGS(&commandQueue)),
-        "ID3D12Device::CreateCommandQueue");
+            IID_PPV_ARGS(&commandQueue));
+    if(streamlineDeviceProxy != nullptr && streamlineDeviceProxy != device.Get())
+        streamlineDeviceProxy->Release();
+    streamlineDeviceProxy = nullptr;
+    throwIfFailed(queueResult, "ID3D12Device::CreateCommandQueue");
 
     ComPtr<IDXGIFactory5> factory5;
     if(SUCCEEDED(factory.As(&factory5)))
@@ -412,15 +1540,23 @@ void D3D12Engine::createSwapChain()
     description.Flags = allowTearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
 
     ComPtr<IDXGISwapChain1> swapChain1;
-    throwIfFailed(
-        factory->CreateSwapChainForHwnd(
+    IDXGIFactory6* swapChainFactory = factory.Get();
+#ifdef BLACKHOLE_HAS_STREAMLINE
+    if(streamlineFactoryProxy != nullptr)
+        swapChainFactory = streamlineFactoryProxy;
+#endif
+
+    const HRESULT swapChainResult = swapChainFactory->CreateSwapChainForHwnd(
             commandQueue.Get(),
             windowHandle,
             &description,
             nullptr,
             nullptr,
-            &swapChain1),
-        "CreateSwapChainForHwnd");
+            &swapChain1);
+    if(streamlineFactoryProxy != nullptr && streamlineFactoryProxy != factory.Get())
+        streamlineFactoryProxy->Release();
+    streamlineFactoryProxy = nullptr;
+    throwIfFailed(swapChainResult, "CreateSwapChainForHwnd");
     throwIfFailed(
         swapChain1.As(&swapChain),
         "Query IDXGISwapChain3");
@@ -536,7 +1672,7 @@ void D3D12Engine::createRayResources()
     outputTexture = createTexture(
         RENDER_WIDTH,
         RENDER_HEIGHT,
-        DXGI_FORMAT_R8G8B8A8_UNORM,
+        COLOR_TEXTURE_FORMAT,
         D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     materialTexture = createTexture(
@@ -561,13 +1697,37 @@ void D3D12Engine::createRayResources()
         D3D12_RESOURCE_FLAG_NONE,
         D3D12_RESOURCE_STATE_GENERIC_READ);
 
+#ifdef BLACKHOLE_HAS_STREAMLINE
+    if(dlssActive)
+    {
+        dlssOutputTexture = createTexture(
+            WIDTH,
+            HEIGHT,
+            COLOR_TEXTURE_FORMAT,
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        dlssDepthTexture = createTexture(
+            RENDER_WIDTH,
+            RENDER_HEIGHT,
+            DXGI_FORMAT_R32_FLOAT,
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        dlssMotionVectorTexture = createTexture(
+            RENDER_WIDTH,
+            RENDER_HEIGHT,
+            DXGI_FORMAT_R16G16_FLOAT,
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
+#endif
+
     D3D12_RANGE readRange{0, 0};
     throwIfFailed(
         objectBuffer->Map(0, &readRange, &objectBufferMapped),
         "Map object buffer");
 
     D3D12_UNORDERED_ACCESS_VIEW_DESC textureUav{};
-    textureUav.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    textureUav.Format = COLOR_TEXTURE_FORMAT;
     textureUav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
     textureUav.Texture2D.MipSlice = 0;
     textureUav.Texture2D.PlaneSlice = 0;
@@ -576,6 +1736,8 @@ void D3D12Engine::createRayResources()
         nullptr,
         &textureUav,
         cpuDescriptor(COLOR_UAV_INDEX));
+
+    textureUav.Format = MATERIAL_TEXTURE_FORMAT;
     device->CreateUnorderedAccessView(
         materialTexture.Get(),
         nullptr,
@@ -616,7 +1778,7 @@ void D3D12Engine::createRayResources()
 
     D3D12_SHADER_RESOURCE_VIEW_DESC textureSrv{};
     textureSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    textureSrv.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    textureSrv.Format = COLOR_TEXTURE_FORMAT;
     textureSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     textureSrv.Texture2D.MostDetailedMip = 0;
     textureSrv.Texture2D.MipLevels = 1;
@@ -626,10 +1788,67 @@ void D3D12Engine::createRayResources()
         outputTexture.Get(),
         &textureSrv,
         cpuDescriptor(COLOR_SRV_INDEX));
+
+    textureSrv.Format = MATERIAL_TEXTURE_FORMAT;
     device->CreateShaderResourceView(
         materialTexture.Get(),
         &textureSrv,
         cpuDescriptor(MATERIAL_SRV_INDEX));
+
+#ifdef BLACKHOLE_HAS_STREAMLINE
+    if(dlssOutputTexture != nullptr)
+    {
+        D3D12_UNORDERED_ACCESS_VIEW_DESC dlssOutputUav{};
+        dlssOutputUav.Format = COLOR_TEXTURE_FORMAT;
+        dlssOutputUav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        device->CreateUnorderedAccessView(
+            dlssOutputTexture.Get(),
+            nullptr,
+            &dlssOutputUav,
+            cpuDescriptor(DLSS_OUTPUT_UAV_INDEX));
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC dlssOutputSrv{};
+        dlssOutputSrv.Shader4ComponentMapping =
+            D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        dlssOutputSrv.Format = COLOR_TEXTURE_FORMAT;
+        dlssOutputSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        dlssOutputSrv.Texture2D.MostDetailedMip = 0;
+        dlssOutputSrv.Texture2D.MipLevels = 1;
+        dlssOutputSrv.Texture2D.PlaneSlice = 0;
+        dlssOutputSrv.Texture2D.ResourceMinLODClamp = 0.0f;
+        device->CreateShaderResourceView(
+            dlssOutputTexture.Get(),
+            &dlssOutputSrv,
+            cpuDescriptor(DLSS_OUTPUT_SRV_INDEX));
+
+        // The compositor consumes a contiguous color/material descriptor
+        // range, so keep a second material SRV next to the DLSS output SRV.
+        D3D12_SHADER_RESOURCE_VIEW_DESC dlssMaterialSrv = dlssOutputSrv;
+        dlssMaterialSrv.Format = MATERIAL_TEXTURE_FORMAT;
+        device->CreateShaderResourceView(
+            materialTexture.Get(),
+            &dlssMaterialSrv,
+            cpuDescriptor(DLSS_MATERIAL_SRV_INDEX));
+
+        D3D12_UNORDERED_ACCESS_VIEW_DESC dlssDepthUav{};
+        dlssDepthUav.Format = DXGI_FORMAT_R32_FLOAT;
+        dlssDepthUav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        device->CreateUnorderedAccessView(
+            dlssDepthTexture.Get(),
+            nullptr,
+            &dlssDepthUav,
+            cpuDescriptor(DLSS_DEPTH_UAV_INDEX));
+
+        D3D12_UNORDERED_ACCESS_VIEW_DESC dlssMotionVectorUav{};
+        dlssMotionVectorUav.Format = DXGI_FORMAT_R16G16_FLOAT;
+        dlssMotionVectorUav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        device->CreateUnorderedAccessView(
+            dlssMotionVectorTexture.Get(),
+            nullptr,
+            &dlssMotionVectorUav,
+            cpuDescriptor(DLSS_MOTION_VECTOR_UAV_INDEX));
+    }
+#endif
 }
 
 void D3D12Engine::createGridGeometry()
@@ -980,6 +2199,35 @@ void D3D12Engine::clearInitialResources()
         0,
         nullptr);
 
+#ifdef BLACKHOLE_HAS_STREAMLINE
+    if(dlssOutputTexture != nullptr)
+    {
+        const float depthClear[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+        const float motionClear[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        commandList->ClearUnorderedAccessViewFloat(
+            gpuDescriptor(DLSS_OUTPUT_UAV_INDEX),
+            cpuDescriptor(DLSS_OUTPUT_UAV_INDEX),
+            dlssOutputTexture.Get(),
+            clearColor,
+            0,
+            nullptr);
+        commandList->ClearUnorderedAccessViewFloat(
+            gpuDescriptor(DLSS_DEPTH_UAV_INDEX),
+            cpuDescriptor(DLSS_DEPTH_UAV_INDEX),
+            dlssDepthTexture.Get(),
+            depthClear,
+            0,
+            nullptr);
+        commandList->ClearUnorderedAccessViewFloat(
+            gpuDescriptor(DLSS_MOTION_VECTOR_UAV_INDEX),
+            cpuDescriptor(DLSS_MOTION_VECTOR_UAV_INDEX),
+            dlssMotionVectorTexture.Get(),
+            motionClear,
+            0,
+            nullptr);
+    }
+#endif
+
     throwIfFailed(commandList->Close(), "Close initialization command list");
     ID3D12CommandList* commandLists[] = {commandList.Get()};
     commandQueue->ExecuteCommandLists(1, commandLists);
@@ -1029,19 +2277,23 @@ void D3D12Engine::render(double schwarzschildRadius, bool rayTracing)
     const bool sampleLimitReached =
         settings.temporalSampleLimit != 0 &&
         accumulatedSampleCount >= settings.temporalSampleLimit;
+    currentJitterX = 0.0f;
+    currentJitterY = 0.0f;
     if(rayTracing && !sampleLimitReached)
         recordRaytrace(schwarzschildRadius, aspect);
     else
         transitionTexture(
             outputTexture.Get(),
-            outputTextureState,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        outputTextureState,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+
+    const bool useDlss = rayTracing && recordDlss(cameraChanged);
     transitionTexture(
         materialTexture.Get(),
         materialTextureState,
         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
-    recordGraphics(schwarzschildRadius, aspect, !rayTracing);
+    recordGraphics(schwarzschildRadius, aspect, !rayTracing, useDlss);
     executeFrame();
 }
 
@@ -1091,6 +2343,8 @@ void D3D12Engine::recordRaytrace(double schwarzschildRadius, float aspect)
     constants.sampleIndex = accumulatedSampleCount;
     constants.jitterX = JITTER_OFFSETS[jitterIndex][0];
     constants.jitterY = JITTER_OFFSETS[jitterIndex][1];
+    currentJitterX = constants.jitterX;
+    currentJitterY = constants.jitterY;
 
     ID3D12DescriptorHeap* descriptorHeaps[] = {srvUavHeap.Get()};
     commandList->SetDescriptorHeaps(1, descriptorHeaps);
@@ -1125,10 +2379,269 @@ void D3D12Engine::recordRaytrace(double schwarzschildRadius, float aspect)
         ++accumulatedSampleCount;
 }
 
+bool D3D12Engine::recordDlss(bool cameraChanged)
+{
+#ifdef BLACKHOLE_HAS_STREAMLINE
+    if(!settings.dlss || !dlssActive ||
+       dlssOutputTexture == nullptr || dlssDepthTexture == nullptr ||
+       dlssMotionVectorTexture == nullptr)
+        return false;
+
+    ++streamlineFrameIndex;
+    sl::Result result = streamline.getNewFrameToken(
+        dlssFrameToken,
+        &streamlineFrameIndex);
+    if(result != sl::Result::eOk || dlssFrameToken == nullptr)
+    {
+        std::cerr << "Streamline could not create a frame token (code "
+                  << static_cast<int>(result)
+                  << "); disabling DLSS for this run.\n";
+        dlssActive = false;
+        return false;
+    }
+
+    // The ray pass produces the input image in render resolution. DLSS reads
+    // it as a non-pixel shader resource and writes the full-resolution output
+    // UAV. The depth/motion inputs are explicit zero-motion/far-depth guides:
+    // this visualization has no rasterized geometry depth, and a camera change
+    // resets temporal history so stale reprojection is never reused.
+    transitionTexture(
+        outputTexture.Get(),
+        outputTextureState,
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    transitionTexture(
+        dlssOutputTexture.Get(),
+        dlssOutputTextureState,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    transitionTexture(
+        dlssDepthTexture.Get(),
+        dlssDepthTextureState,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    transitionTexture(
+        dlssMotionVectorTexture.Get(),
+        dlssMotionVectorTextureState,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+    const float depthClear[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    const float motionClear[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    commandList->ClearUnorderedAccessViewFloat(
+        gpuDescriptor(DLSS_DEPTH_UAV_INDEX),
+        cpuDescriptor(DLSS_DEPTH_UAV_INDEX),
+        dlssDepthTexture.Get(),
+        depthClear,
+        0,
+        nullptr);
+    commandList->ClearUnorderedAccessViewFloat(
+        gpuDescriptor(DLSS_MOTION_VECTOR_UAV_INDEX),
+        cpuDescriptor(DLSS_MOTION_VECTOR_UAV_INDEX),
+        dlssMotionVectorTexture.Get(),
+        motionClear,
+        0,
+        nullptr);
+
+    const float inverseSchwarzschildRadius = static_cast<float>(
+        1.0 / SagA.r_s);
+    const glm::vec3 eye = camera.pos * inverseSchwarzschildRadius;
+    const glm::vec3 target = camera.target * inverseSchwarzschildRadius;
+    const glm::mat4 projection = glm::perspective(
+        glm::radians(camera.fovY),
+        static_cast<float>(WIDTH) / static_cast<float>(HEIGHT),
+        0.05f,
+        200.0f);
+
+    const auto toStreamlineMatrix = [](const glm::mat4& matrix)
+    {
+        sl::float4x4 result{};
+        for(std::uint32_t row = 0; row < 4; ++row)
+        {
+            result.row[row] = sl::float4(
+                matrix[0][row],
+                matrix[1][row],
+                matrix[2][row],
+                matrix[3][row]);
+        }
+        return result;
+    };
+
+    sl::Constants constants{};
+    constants.cameraViewToClip = toStreamlineMatrix(projection);
+    constants.clipToCameraView = toStreamlineMatrix(glm::inverse(projection));
+    constants.clipToPrevClip = toStreamlineMatrix(glm::mat4(1.0f));
+    constants.prevClipToClip = toStreamlineMatrix(glm::mat4(1.0f));
+    constants.jitterOffset = sl::float2(currentJitterX, currentJitterY);
+    constants.mvecScale = sl::float2(1.0f, 1.0f);
+    constants.cameraPinholeOffset = sl::float2(0.0f, 0.0f);
+    constants.cameraPos = sl::float3(eye.x, eye.y, eye.z);
+    constants.cameraUp = sl::float3(0.0f, 1.0f, 0.0f);
+    const glm::vec3 forward = glm::normalize(target - eye);
+    glm::vec3 right = glm::cross(
+        forward,
+        glm::vec3(0.0f, 1.0f, 0.0f));
+    if(glm::dot(right, right) < 1.0e-8f)
+        right = glm::vec3(0.0f, 0.0f, 1.0f);
+    else
+        right = glm::normalize(right);
+    const glm::vec3 up = glm::normalize(glm::cross(right, forward));
+    constants.cameraRight = sl::float3(right.x, right.y, right.z);
+    constants.cameraFwd = sl::float3(forward.x, forward.y, forward.z);
+    constants.cameraNear = 0.05f;
+    constants.cameraFar = 200.0f;
+    constants.cameraFOV = glm::radians(camera.fovY);
+    constants.cameraAspectRatio =
+        static_cast<float>(WIDTH) / static_cast<float>(HEIGHT);
+    constants.depthInverted = sl::eFalse;
+    constants.cameraMotionIncluded = sl::eTrue;
+    constants.motionVectors3D = sl::eFalse;
+    constants.reset = cameraChanged ? sl::eTrue : sl::eFalse;
+    constants.orthographicProjection = sl::eFalse;
+    constants.motionVectorsDilated = sl::eFalse;
+    constants.motionVectorsJittered = sl::eFalse;
+
+    result = streamline.setConstants(
+        constants,
+        *dlssFrameToken,
+        dlssViewport);
+    if(result != sl::Result::eOk)
+    {
+        std::cerr << "Streamline rejected the frame constants (code "
+                  << static_cast<int>(result)
+                  << "); disabling DLSS for this run.\n";
+        dlssActive = false;
+        transitionTexture(
+            outputTexture.Get(),
+            outputTextureState,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        return false;
+    }
+
+    const sl::Extent renderExtent{
+        0,
+        0,
+        static_cast<std::uint32_t>(RENDER_WIDTH),
+        static_cast<std::uint32_t>(RENDER_HEIGHT)};
+    const sl::Extent outputExtent{
+        0,
+        0,
+        static_cast<std::uint32_t>(WIDTH),
+        static_cast<std::uint32_t>(HEIGHT)};
+
+    sl::Resource colorIn{
+        sl::ResourceType::eTex2d,
+        outputTexture.Get(),
+        static_cast<std::uint32_t>(
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE)};
+    colorIn.width = static_cast<std::uint32_t>(RENDER_WIDTH);
+    colorIn.height = static_cast<std::uint32_t>(RENDER_HEIGHT);
+    colorIn.nativeFormat = static_cast<std::uint32_t>(COLOR_TEXTURE_FORMAT);
+    colorIn.mipLevels = 1;
+    colorIn.arrayLayers = 1;
+    colorIn.flags = static_cast<std::uint32_t>(
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+
+    sl::Resource colorOut{
+        sl::ResourceType::eTex2d,
+        dlssOutputTexture.Get(),
+        static_cast<std::uint32_t>(D3D12_RESOURCE_STATE_UNORDERED_ACCESS)};
+    colorOut.width = static_cast<std::uint32_t>(WIDTH);
+    colorOut.height = static_cast<std::uint32_t>(HEIGHT);
+    colorOut.nativeFormat = static_cast<std::uint32_t>(COLOR_TEXTURE_FORMAT);
+    colorOut.mipLevels = 1;
+    colorOut.arrayLayers = 1;
+    colorOut.flags = static_cast<std::uint32_t>(
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+
+    sl::Resource depth{
+        sl::ResourceType::eTex2d,
+        dlssDepthTexture.Get(),
+        static_cast<std::uint32_t>(D3D12_RESOURCE_STATE_UNORDERED_ACCESS)};
+    depth.width = static_cast<std::uint32_t>(RENDER_WIDTH);
+    depth.height = static_cast<std::uint32_t>(RENDER_HEIGHT);
+    depth.nativeFormat = static_cast<std::uint32_t>(DXGI_FORMAT_R32_FLOAT);
+    depth.mipLevels = 1;
+    depth.arrayLayers = 1;
+    depth.flags = static_cast<std::uint32_t>(
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+
+    sl::Resource motionVectors{
+        sl::ResourceType::eTex2d,
+        dlssMotionVectorTexture.Get(),
+        static_cast<std::uint32_t>(D3D12_RESOURCE_STATE_UNORDERED_ACCESS)};
+    motionVectors.width = static_cast<std::uint32_t>(RENDER_WIDTH);
+    motionVectors.height = static_cast<std::uint32_t>(RENDER_HEIGHT);
+    motionVectors.nativeFormat = static_cast<std::uint32_t>(
+        DXGI_FORMAT_R16G16_FLOAT);
+    motionVectors.mipLevels = 1;
+    motionVectors.arrayLayers = 1;
+    motionVectors.flags = static_cast<std::uint32_t>(
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+
+    sl::ResourceTag colorInTag{
+        &colorIn,
+        sl::kBufferTypeScalingInputColor,
+        sl::eOnlyValidNow,
+        &renderExtent};
+    sl::ResourceTag colorOutTag{
+        &colorOut,
+        sl::kBufferTypeScalingOutputColor,
+        sl::eValidUntilPresent,
+        &outputExtent};
+    sl::ResourceTag depthTag{
+        &depth,
+        sl::kBufferTypeDepth,
+        sl::eOnlyValidNow,
+        &renderExtent};
+    sl::ResourceTag motionVectorTag{
+        &motionVectors,
+        sl::kBufferTypeMotionVectors,
+        sl::eOnlyValidNow,
+        &renderExtent};
+
+    const sl::BaseStructure* inputs[] = {
+        &dlssViewport,
+        &colorInTag,
+        &colorOutTag,
+        &depthTag,
+        &motionVectorTag};
+    result = streamline.evaluateFeature(
+        sl::kFeatureDLSS,
+        *dlssFrameToken,
+        inputs,
+        static_cast<std::uint32_t>(std::size(inputs)),
+        reinterpret_cast<sl::CommandBuffer*>(commandList.Get()));
+    if(result != sl::Result::eOk)
+    {
+        std::cerr << "DLSS evaluation failed (code "
+                  << static_cast<int>(result)
+                  << "); disabling DLSS for this run.\n";
+        dlssActive = false;
+        transitionTexture(
+            outputTexture.Get(),
+            outputTextureState,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        return false;
+    }
+
+    // Streamline may replace the command-list bindings. recordGraphics binds
+    // its own root signature and pipeline, but restoring the shader-visible
+    // heap here also keeps the state explicit for the next pass.
+    ID3D12DescriptorHeap* descriptorHeaps[] = {srvUavHeap.Get()};
+    commandList->SetDescriptorHeaps(1, descriptorHeaps);
+    transitionTexture(
+        dlssOutputTexture.Get(),
+        dlssOutputTextureState,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    return true;
+#else
+    (void)cameraChanged;
+    return false;
+#endif
+}
+
 void D3D12Engine::recordGraphics(
     double schwarzschildRadius,
     float aspect,
-    bool drawFallback)
+    bool drawFallback,
+    bool useDlss)
 {
     D3D12_RESOURCE_BARRIER backBufferBarrier{};
     backBufferBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -1247,7 +2760,9 @@ void D3D12Engine::recordGraphics(
     commandList->SetPipelineState(compositePipeline.Get());
     commandList->SetGraphicsRootDescriptorTable(
         1,
-        gpuDescriptor(COLOR_SRV_INDEX));
+        gpuDescriptor(useDlss
+                          ? DLSS_OUTPUT_SRV_INDEX
+                          : COLOR_SRV_INDEX));
     commandList->SetGraphicsRoot32BitConstants(2, 8, &constants, 0);
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     commandList->DrawInstanced(6, 1, 0, 0);
@@ -1478,6 +2993,11 @@ LRESULT D3D12Engine::handleMessage(
     switch(message)
     {
     case WM_KEYDOWN:
+        if(wParam == VK_F1)
+        {
+            toggleQualityPanel();
+            return 0;
+        }
         if(wParam == VK_ESCAPE)
         {
             closing = true;
@@ -1485,6 +3005,45 @@ LRESULT D3D12Engine::handleMessage(
             return 0;
         }
         break;
+
+    case WM_COMMAND:
+        handleQualityCommand(wParam, lParam);
+        return 0;
+
+    case WM_HSCROLL:
+        handleQualityScroll(wParam, lParam);
+        return 0;
+
+    case WM_SIZE:
+        if(qualityPanel != nullptr)
+            layoutQualityPanel();
+        return 0;
+
+    case WM_CTLCOLORSTATIC:
+    {
+        HDC dc = reinterpret_cast<HDC>(wParam);
+        HWND control = reinterpret_cast<HWND>(lParam);
+        SetBkMode(dc, TRANSPARENT);
+        if(control == fpsLabel)
+        {
+            SetTextColor(dc, RGB(245, 224, 150));
+            return reinterpret_cast<LRESULT>(GetStockObject(NULL_BRUSH));
+        }
+        SetTextColor(dc, RGB(218, 224, 235));
+        return reinterpret_cast<LRESULT>(qualityPanelBrush != nullptr
+                                             ? qualityPanelBrush
+                                             : GetStockObject(BLACK_BRUSH));
+    }
+
+    case WM_CTLCOLORBTN:
+    {
+        HDC dc = reinterpret_cast<HDC>(wParam);
+        SetTextColor(dc, RGB(218, 224, 235));
+        SetBkColor(dc, RGB(15, 19, 27));
+        return reinterpret_cast<LRESULT>(qualityPanelBrush != nullptr
+                                             ? qualityPanelBrush
+                                             : GetStockObject(BLACK_BRUSH));
+    }
 
     case WM_CLOSE:
         closing = true;

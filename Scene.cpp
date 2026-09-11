@@ -104,6 +104,27 @@ float readScaleEnvironment()
 
     return parsed;
 }
+
+DlssQualityMode readDlssModeEnvironment()
+{
+    const char* value = std::getenv("BLACKHOLE_DLSS_MODE");
+    if(value == nullptr || *value == '\0')
+        return DlssQualityMode::Quality;
+
+    const std::string mode(value);
+    if(mode == "quality" || mode == "Quality" || mode == "maxquality")
+        return DlssQualityMode::Quality;
+    if(mode == "balanced" || mode == "Balanced")
+        return DlssQualityMode::Balanced;
+    if(mode == "performance" || mode == "Performance")
+        return DlssQualityMode::Performance;
+    if(mode == "ultraperformance" || mode == "UltraPerformance")
+        return DlssQualityMode::UltraPerformance;
+
+    std::cerr << "Ignoring invalid BLACKHOLE_DLSS_MODE='" << value
+              << "' (expected quality/balanced/performance/ultraperformance)\n";
+    return DlssQualityMode::Quality;
+}
 }
 
 RenderSettings loadRenderSettings()
@@ -122,6 +143,7 @@ RenderSettings loadRenderSettings()
         8192);
 
     const float scale = readScaleEnvironment();
+    settings.renderScale = scale;
     const int scaledWidth = static_cast<int>(
         std::lround(static_cast<float>(settings.windowWidth) * scale));
     const int scaledHeight = static_cast<int>(
@@ -147,14 +169,13 @@ RenderSettings loadRenderSettings()
         DEFAULT_TEMPORAL_SAMPLE_LIMIT,
         0,
         1000000);
-    settings.targetFps = readIntEnvironment(
-        "BLACKHOLE_TARGET_FPS",
-        DEFAULT_TARGET_FPS,
-        0,
-        1000);
     settings.rayTracing = readBooleanEnvironment(
         "BLACKHOLE_RAYTRACE",
         DEFAULT_RAYTRACING);
+    settings.dlss = readBooleanEnvironment(
+        "BLACKHOLE_DLSS",
+        DEFAULT_DLSS);
+    settings.dlssMode = readDlssModeEnvironment();
     settings.vsync = readBooleanEnvironment("BLACKHOLE_VSYNC", false);
 
     return settings;

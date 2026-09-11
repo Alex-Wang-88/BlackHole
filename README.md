@@ -12,18 +12,19 @@ writes directly into UAV textures used by the D3D12 compositor.
   compute and graphics backend.
 - Kept the heavy ray integration on the GPU and removed the GPU-to-CPU-to-GPU
   frame copy.
-- GPU ray tracing is enabled by default with a 256×192 working resolution,
-  6144 integration steps, and one temporal sample for a smoother 60 FPS
-  preset on the tested RTX 5060 Laptop GPU. More temporal samples remain
-  available through `BLACKHOLE_TAA_SAMPLES` when image quality is preferred.
+- GPU ray tracing is enabled by default with a 533×400 working resolution,
+  6144 integration steps, and one temporal sample. The default DLSS mode is
+  Quality (highest) at an 800×600 output resolution on the tested RTX 5060
+  Laptop GPU.
 - Ray tracing can still be disabled for a lightweight raster black-hole
   silhouette and grid view.
-- The default target is 60 FPS. VSync remains disabled so the application uses
-  its own stable frame pacing.
+- Frame pacing is unlimited by default. VSync remains disabled; the live
+  quality panel shows the measured FPS in the upper-left corner.
 - Added discrete-GPU preference exports for NVIDIA Optimus and AMD PowerXpress
   laptops.
-- Added runtime settings for resolution, integration steps, temporal samples,
-  and VSync.
+- Added an in-window image-quality panel with live controls for ray tracing,
+  render scale, ray integration steps, DLSS mode, temporal samples, VSync,
+  and reset-to-defaults. Press `F1` to show or hide it.
 
 ## Requirements
 
@@ -59,12 +60,13 @@ All settings are optional environment variables:
 | Variable | Default | Meaning |
 | --- | ---: | --- |
 | `BLACKHOLE_WINDOW_WIDTH` / `BLACKHOLE_WINDOW_HEIGHT` | `800` / `600` | Window size |
-| `BLACKHOLE_RENDER_SCALE` | `0.32` | GPU render size relative to the window, `0.25` to `4.0` |
+| `BLACKHOLE_RENDER_SCALE` | `0.6667` | GPU render size relative to the window, `0.25` to `4.0` |
 | `BLACKHOLE_RENDER_WIDTH` / `BLACKHOLE_RENDER_HEIGHT` | scaled window size | Explicit GPU render size |
 | `BLACKHOLE_RAYTRACE` | `1` | Set to `0` to use the lightweight raster fallback |
 | `BLACKHOLE_MAX_STEPS` | `6144` | Maximum geodesic integration steps per ray |
 | `BLACKHOLE_TAA_SAMPLES` | `1` | Temporal accumulation limit when ray tracing is enabled; `0` means unlimited |
-| `BLACKHOLE_TARGET_FPS` | `60` | Frame-rate target; `0` means unlimited |
+| `BLACKHOLE_DLSS` | `1` | Enable NVIDIA DLSS when the Streamline runtime is available |
+| `BLACKHOLE_DLSS_MODE` | `quality` | `quality`, `balanced`, `performance`, or `ultraperformance` |
 | `BLACKHOLE_VSYNC` | `0` | Set to `1` to enable VSync |
 
 For example, to render at 2560×1600 with VSync disabled:
@@ -84,6 +86,19 @@ removing it entirely would allow a bad ray or driver timeout to hang the GPU.
 - Left mouse drag: orbit around the black hole
 - `Shift` + left mouse drag: pan the camera target
 - Mouse wheel: zoom in or out
+- `F1`: show or hide the detailed image-quality panel
+
+The panel's default `Quality (highest)` DLSS option is the highest-quality
+DLSS Super Resolution mode. The panel's render-scale and integration-step
+sliders are independent, so you can trade GPU time for image detail without
+changing the display output resolution. Settings changed in the panel last
+for the current run; environment variables provide repeatable startup values.
+
+DLSS is integrated through NVIDIA Streamline's D3D12 path. The public headers
+are included under `third_party/streamline/include`; the signed runtime DLLs
+are intentionally not committed and must be placed in
+`third_party/streamline/bin` or supplied with
+`BLACKHOLE_STREAMLINE_RUNTIME_DIR`.
 
 Camera movement resets temporal accumulation. With ray tracing disabled, a
 lightweight raster black-hole silhouette and accretion ring remain visible;

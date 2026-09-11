@@ -16,13 +16,24 @@
 
 inline constexpr int DEFAULT_WINDOW_WIDTH = 800;
 inline constexpr int DEFAULT_WINDOW_HEIGHT = 600;
-inline constexpr float DEFAULT_RENDER_SCALE = 0.32f;
-inline constexpr int DEFAULT_RENDER_WIDTH = 256;
-inline constexpr int DEFAULT_RENDER_HEIGHT = 192;
+// DLSS Quality uses roughly two-thirds of the display resolution as its
+// source image. This keeps the ray integrator affordable while giving the
+// super-resolution pass enough detail to reconstruct a clean 800x600 frame.
+inline constexpr float DEFAULT_RENDER_SCALE = 0.6667f;
+inline constexpr int DEFAULT_RENDER_WIDTH = 533;
+inline constexpr int DEFAULT_RENDER_HEIGHT = 400;
 inline constexpr std::uint32_t DEFAULT_MAX_STEPS = 6144;
 inline constexpr std::uint32_t DEFAULT_TEMPORAL_SAMPLE_LIMIT = 1;
-inline constexpr int DEFAULT_TARGET_FPS = 60;
 inline constexpr bool DEFAULT_RAYTRACING = true;
+inline constexpr bool DEFAULT_DLSS = true;
+
+enum class DlssQualityMode : std::uint8_t
+{
+    Quality = 0,
+    Balanced,
+    Performance,
+    UltraPerformance
+};
 // A larger integration step lets the reduced-step Windows preset traverse
 // the camera-to-disk distance without running thousands of empty iterations.
 inline constexpr double D_LAMBDA_METERS = 1.0e8;
@@ -41,8 +52,10 @@ struct RenderSettings
     // Zero means keep accumulating instead of stopping after a fixed number
     // of temporal samples.
     std::uint32_t temporalSampleLimit = DEFAULT_TEMPORAL_SAMPLE_LIMIT;
-    int targetFps = DEFAULT_TARGET_FPS;
     bool rayTracing = DEFAULT_RAYTRACING;
+    bool dlss = DEFAULT_DLSS;
+    DlssQualityMode dlssMode = DlssQualityMode::Quality;
+    float renderScale = DEFAULT_RENDER_SCALE;
     bool vsync = false;
 };
 

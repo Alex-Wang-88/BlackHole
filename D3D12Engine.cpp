@@ -2673,6 +2673,7 @@ void D3D12Engine::render(double schwarzschildRadius, bool rayTracing)
         glm::length(camera.pos - previousCameraPos) > 1.0e4f ||
         glm::length(camera.target - previousCameraTarget) > 1.0e4f ||
         std::fabs(camera.fovY - previousCameraFov) > 1.0e-5f;
+    const auto now = std::chrono::steady_clock::now();
     if(cameraChanged)
     {
         accumulatedSampleCount = 0;
@@ -2680,7 +2681,27 @@ void D3D12Engine::render(double schwarzschildRadius, bool rayTracing)
         previousCameraTarget = camera.target;
         previousCameraFov = camera.fovY;
         hasPreviousCamera = true;
+        lastCameraChangeTime = now;
     }
+
+    const bool cameraIsInMotion =
+        camera.dragging ||
+        (lastCameraChangeTime.time_since_epoch().count() != 0 &&
+         now - lastCameraChangeTime < MOTION_PREVIEW_HOLD);
+    if(!cameraIsInMotion && motionPreviewActive)
+    {
+        // Keep the latest camera transform, but force one fresh sample with
+        // the user's selected quality after the lightweight motion preview.
+        accumulatedSampleCount = 0;
+        currentJitterX = 0.0f;
+        currentJitterY = 0.0f;
+    }
+    motionPreviewActive = cameraIsInMotion;
+    const std::uint32_t activeMaxSteps = cameraIsInMotion
+                                             ? std::min(
+                                                   settings.maxSteps,
+                                                   MOTION_PREVIEW_MAX_STEPS)
+                                             : settings.maxSteps;
 
     const bool sampleLimitReached =
         settings.temporalSampleLimit != 0 &&
@@ -2688,7 +2709,7 @@ void D3D12Engine::render(double schwarzschildRadius, bool rayTracing)
     currentJitterX = 0.0f;
     currentJitterY = 0.0f;
     if(rayTracing && !sampleLimitReached)
-        recordRaytrace(schwarzschildRadius, aspect);
+        recordRaytrace(schwarzschildRadius, aspect, activeMaxSteps);
     else
         transitionTexture(
             outputTexture.Get(),
@@ -2705,7 +2726,10 @@ void D3D12Engine::render(double schwarzschildRadius, bool rayTracing)
     executeFrame();
 }
 
-void D3D12Engine::recordRaytrace(double schwarzschildRadius, float aspect)
+void D3D12Engine::recordRaytrace(
+    double schwarzschildRadius,
+    float aspect,
+    std::uint32_t maxSteps)
 {
     transitionTexture(
         outputTexture.Get(),
@@ -2739,7 +2763,7 @@ void D3D12Engine::recordRaytrace(double schwarzschildRadius, float aspect)
     constants.aspect = aspect;
     constants.renderWidth = static_cast<std::uint32_t>(RENDER_WIDTH);
     constants.renderHeight = static_cast<std::uint32_t>(RENDER_HEIGHT);
-    constants.maxSteps = settings.maxSteps;
+    constants.maxSteps = maxSteps;
     constants.dLambda = static_cast<float>(
         D_LAMBDA_METERS / schwarzschildRadius);
     constants.escapeR = static_cast<float>(

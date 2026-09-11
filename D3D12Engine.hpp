@@ -14,6 +14,7 @@
 #endif
 
 #include <cstdint>
+#include <chrono>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -59,6 +60,12 @@ private:
     static constexpr UINT DLSS_DEPTH_UAV_INDEX = 10;
     static constexpr UINT DLSS_MOTION_VECTOR_UAV_INDEX = 11;
     static constexpr int QUALITY_PANEL_WIDTH = 320;
+    // Camera interaction uses a bounded preview workload so a max-quality
+    // still image does not turn into a single-digit-FPS viewport while the
+    // user is orbiting. The selected setting is restored after the camera
+    // settles.
+    static constexpr std::uint32_t MOTION_PREVIEW_MAX_STEPS = 1024;
+    static constexpr std::chrono::milliseconds MOTION_PREVIEW_HOLD{180};
 
     enum QualityControlId : int
     {
@@ -174,6 +181,8 @@ private:
     float currentJitterX = 0.0f;
     float currentJitterY = 0.0f;
     bool dlssActive = false;
+    bool motionPreviewActive = false;
+    std::chrono::steady_clock::time_point lastCameraChangeTime{};
 
 #ifdef BLACKHOLE_HAS_STREAMLINE
     struct StreamlineApi
@@ -251,7 +260,10 @@ private:
     void connectStreamlineDevice();
     void shutdownStreamline();
 
-    void recordRaytrace(double schwarzschildRadius, float aspect);
+    void recordRaytrace(
+        double schwarzschildRadius,
+        float aspect,
+        std::uint32_t maxSteps);
     bool recordDlss(bool cameraChanged);
     void recordGraphics(
         double schwarzschildRadius,

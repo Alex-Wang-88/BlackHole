@@ -30,6 +30,10 @@ writes directly into UAV textures used by the D3D12 compositor.
   changes on release. It provides live controls for ray tracing, render scale,
   ray integration steps, DLSS mode, temporal samples, VSync, and
   reset-to-defaults. Press `F1` to show or hide it.
+- Camera interaction uses an adaptive preview path: while orbiting, the ray
+  integrator is temporarily capped at 1024 steps so a max-quality still-image
+  setting remains responsive. After 180ms without camera input, the selected
+  integration limit is restored and a fresh high-quality sample is rendered.
 
 ## Requirements
 
@@ -98,6 +102,8 @@ DLSS Super Resolution mode. The panel's render-scale and integration-step
 sliders are independent, so you can trade GPU time for image detail without
 changing the display output resolution. Settings changed in the panel last
 for the current run; environment variables provide repeatable startup values.
+The motion preview cap is separate from the selected ray-step value and is not
+an FPS limiter.
 
 DLSS is integrated through NVIDIA Streamline's D3D12 path. The public headers
 are included under `third_party/streamline/include`; the signed runtime DLLs
